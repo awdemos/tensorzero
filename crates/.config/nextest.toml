@@ -68,6 +68,21 @@ retries = { backoff = "exponential", count = 2, delay = "5s", jitter = true, max
 slow-timeout = { period = "30s", terminate-after = 2 }
 junit.path = "junit.xml"
 
+# One-shot fixture installer for the `rest-bootstrap` e2e flavor. This
+# profile runs the `#[ignore]`d `rest_bootstrap::fixture_config` test
+# (not picked up by the default `e2e` profile above), which reads the
+# `config-in-db/{tensorzero,postgres}.*.toml` fixture glob and posts the
+# result to `/internal/config_toml/apply` on an empty, DB-authoritative
+# gateway. Intended to run once before the main live-tests suite, not
+# alongside it.
+[profile.rest-bootstrap-fixture-loader]
+default-filter = 'binary(e2e) and test(rest_bootstrap::)'
+run-ignored = "only"
+test-threads = 1
+retries = 0
+slow-timeout = { period = "60s", terminate-after = 2 }
+junit.path = "junit.xml"
+
 [profile.live-batch]
 default-filter = 'test(batch) and not test(mock) and not test(postgres)'
 

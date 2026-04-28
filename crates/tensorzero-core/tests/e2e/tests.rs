@@ -45,6 +45,7 @@ mod rate_limiting_startup;
 mod raw_response;
 mod raw_usage;
 mod render_inferences;
+mod rest_bootstrap;
 mod retries;
 mod streaming_errors;
 mod template;

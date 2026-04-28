@@ -13,7 +13,10 @@
 //! config/template bind mounts. They do not run in the regular live
 //! suite, which uses the TOML-config gateway.
 
-mod bootstrap;
+// `pub(crate)` so sibling test modules (e.g. `rest_bootstrap`) can reuse the
+// REST apply helpers without copying them. The submodule stays test-binary
+// scoped — nothing here is exported outside the `e2e` integration test.
+pub(crate) mod bootstrap;
 
 use std::collections::HashMap;
 

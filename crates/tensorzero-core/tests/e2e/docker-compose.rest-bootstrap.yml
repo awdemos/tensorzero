@@ -1,0 +1,78 @@
+# Override for docker-compose.live.yml that boots the gateway empty and then
+# installs the same fixture config the `config-in-db` flavor uses — but
+# through the REST apply endpoint (`POST /internal/config_toml/apply`)
+# instead of the `--migrate-config` CLI.
+#
+# Usage:
+#   docker compose -f docker-compose.live.yml -f docker-compose.rest-bootstrap.yml ...
+#
+# This override:
+#   1. Rewires the main `gateway` service to boot empty in DB-authoritative
+#      mode (no `--config-file`, `ENABLE_CONFIG_IN_DATABASE=true`).
+#   2. Adds a one-shot `gateway-rest-bootstrap` service that uses the
+#      `live-tests` image to run the `rest-bootstrap-fixture-loader` nextest
+#      profile — a single `#[ignore]`d test that reads the fixture glob and
+#      POSTs it to `/internal/config_toml/apply`.
+#   3. Gates `live-tests` on that one-shot completing successfully, so the
+#      main suite only runs once the fixture config is live.
+#
+# Compared to `docker-compose.config-in-db.yml`, this exercises the HTTP
+# apply pipeline end-to-end (toml_to_config → validate → write_stored_config
+# → hot-swap). Bugs like the rate_limiting roundtrip one land here; the
+# migrate-config flavor doesn't see them because it never goes through
+# `/apply`.
+
+services:
+  gateway:
+    environment:
+      TENSORZERO_INTERNAL_FLAG_ENABLE_CONFIG_IN_DATABASE: "true"
+    # Clear the `--config-file` args from docker-compose.live.yml so the
+    # gateway starts with no user-defined functions/models — the REST
+    # bootstrap step below installs them into the running gateway.
+    command: []
+    depends_on:
+      gateway-postgres-migrations:
+        condition: service_healthy
+
+  gateway-rest-bootstrap:
+    image: tensorzero/live-tests:${TENSORZERO_COMMIT_TAG}
+    depends_on:
+      gateway:
+        condition: service_healthy
+    environment:
+      FORCE_COLOR: ${FORCE_COLOR:-1}
+      # `rest_bootstrap::fixture_config` reads this via
+      # `std::env::var("TENSORZERO_REST_BOOTSTRAP_CONFIG_PATH")`, defaulting
+      # to the same glob `--migrate-config` uses so the two flavors assert
+      # the same set of functions/models/etc. end up live.
+      TENSORZERO_REST_BOOTSTRAP_CONFIG_PATH: "tensorzero-core/tests/e2e/config-in-db/{tensorzero,postgres}.*.toml"
+      TENSORZERO_GATEWAY_URL: http://gateway:3000
+    volumes:
+      # Mount the fixture TOMLs the loader reads.
+      - ./:/app/tensorzero-core/tests/e2e:ro
+      - ../../fixtures:/app/tensorzero-core/fixtures:ro
+      - ../../../../ui/fixtures:/app/ui/fixtures:ro
+    working_dir: /app/crates
+    # One-shot: run the `rest-bootstrap-fixture-loader` nextest profile,
+    # which is the single `#[ignore]`d fixture-loader test. `run-ignored`
+    # is pinned in the profile definition, so the flag isn't needed here.
+    command:
+      [
+        "cargo-nextest",
+        "nextest",
+        "run",
+        "--archive-file",
+        "tests.tar.zst",
+        "--workspace-remap",
+        "/app/crates",
+        "--config-file",
+        "/app/crates/.config/nextest.toml",
+        "--profile",
+        "rest-bootstrap-fixture-loader",
+      ]
+    restart: "no"
+
+  live-tests:
+    depends_on:
+      gateway-rest-bootstrap:
+        condition: service_completed_successfully
