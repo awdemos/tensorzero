@@ -1,0 +1,43 @@
+# Override for docker-compose.live.yml that runs the gateway in
+# **config-in-database mode against an empty DB** — no `--config-file`,
+# no `--migrate-config` step, no fixtures. The gateway boots with an
+# empty config and the test suite drives it through the per-object REST
+# endpoints (`/internal/functions`, `/internal/functions/{name}/variants`)
+# starting from zero.
+#
+# This is the deployment shape the UI walkthrough exercises: a fresh
+# install with nothing pre-seeded.
+#
+# Usage:
+#   docker compose \
+#     -f docker-compose.live.yml \
+#     -f docker-compose.config-in-db-empty.yml \
+#     ...
+#
+# Backend selection (PG-obs vs CH-obs lane) is driven by env vars on the
+# wrapper command:
+#   - PG-obs: `TENSORZERO_CLICKHOUSE_URL=""` so `Auto` resolution falls
+#     through to Postgres.
+#   - CH-obs: leave `TENSORZERO_CLICKHOUSE_URL` at its default; `Auto`
+#     picks ClickHouse.
+#
+# We deliberately do NOT depend on `fixtures` or `fixtures-postgres` from
+# `docker-compose.live.yml` here — the empty-bootstrap path is the
+# point. Compose can't remove items from `depends_on`, so callers must
+# scope the run to the `live-tests` service and not bring up fixtures.
+
+services:
+  gateway:
+    environment:
+      TENSORZERO_INTERNAL_FLAG_ENABLE_CONFIG_IN_DATABASE: "true"
+      # Allow the wrapper to blank this for the PG-obs lane.
+      TENSORZERO_CLICKHOUSE_URL: ${TENSORZERO_CLICKHOUSE_URL_OVERRIDE-http://chuser:chpassword@clickhouse:8123/tensorzero_e2e_tests}
+    # Clear `--config-file` so main.rs falls through to the DB-config
+    # branch (empty DB → empty config).
+    command: []
+
+  live-tests:
+    environment:
+      # Same override applies on the test-runner side so any test-helper
+      # code that probes the backend agrees with the gateway.
+      TENSORZERO_CLICKHOUSE_URL: ${TENSORZERO_CLICKHOUSE_URL_OVERRIDE-http://chuser:chpassword@clickhouse:8123/tensorzero_e2e_tests}

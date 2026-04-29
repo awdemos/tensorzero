@@ -37,21 +37,14 @@ slow-timeout = { period = "20s", terminate-after = 5 }
 retries = { backoff = "exponential", count = 4, delay = "5s", jitter = true, max-delay = "60s" }
 slow-timeout = { period = "30s", terminate-after = 2 }
 default-filter = '''
-not (test(batch) | test(test_dummy_only) | test(clickhouse::) | (test(db::) & !test(postgres) & !test(valkey)) | test(export_bindings_) | test(export_schema_) | binary(optimization-mock) | package(tensorzero-derive) | package(evaluations) | test(config_editing::) | test(db_only_boot::))
+not (test(batch) | test(test_dummy_only) | test(clickhouse::) | (test(db::) & !test(postgres) & !test(valkey)) | test(export_bindings_) | test(export_schema_) | binary(optimization-mock) | package(tensorzero-derive) | package(evaluations) | test(db_only_boot::))
 '''
 junit.path = "junit.xml"
 
-# Run only the config editing e2e tests. These mutate gateway-wide config state
-# via `/internal/config_toml/apply`, so they must not race with the main e2e
-# suite and run after it finishes in the live-tests-config-in-database workflow.
-[profile.config-editing]
-default-filter = 'binary(e2e) and test(config_editing::)'
-# These tests all mutate gateway-wide config state, so they must run one at a
-# time even within the profile.
-test-threads = 1
-retries = { backoff = "exponential", count = 2, delay = "5s", jitter = true, max-delay = "30s" }
-slow-timeout = { period = "30s", terminate-after = 2 }
-junit.path = "junit.xml"
+# The `config-editing` profile was removed alongside the legacy
+# `/internal/config_toml*` endpoints (see roadmap "To delete (Phase 3
+# cleanup PR)"). Per-object REST endpoint tests run under the default
+# `[profile.e2e]` filter.
 
 # Run only the zero-config-boot e2e tests against a gateway that booted
 # from a migrated-but-empty Postgres with `ENABLE_CONFIG_IN_DATABASE=true`
@@ -87,6 +80,16 @@ junit.path = "junit.xml"
 # These run against both ClickHouse and Postgres-backed TensorZero gateway.
 [profile.endpoints]
 default-filter = 'binary(e2e) and test(endpoints::)'
+junit.path = "junit.xml"
+retries = { backoff = "exponential", count = 4, delay = "5s", jitter = true, max-delay = "60s" }
+
+# Run only the per-object REST endpoint tests, used by the
+# `live-tests-config-in-database` CI lane that boots the gateway against
+# an empty DB-config setup. Narrower than `[profile.endpoints]` because
+# the empty-bootstrap lane intentionally lacks the fixtures most other
+# endpoint tests rely on.
+[profile.config-in-db-empty]
+default-filter = 'binary(e2e) and test(endpoints::internal::functions_rest::)'
 junit.path = "junit.xml"
 retries = { backoff = "exponential", count = 4, delay = "5s", jitter = true, max-delay = "60s" }
 
@@ -137,6 +140,11 @@ e2e_aws_sagemaker_openai = { max-threads = 2 }
 e2e_groq = { max-threads = 1 }
 # Run ClickHouse migration tests serially to avoid conflicts
 clickhouse_migration = { max-threads = 1 }
+# Per-object REST endpoint tests share a single gateway and each mutating
+# call rebuilds + hot-swaps the live config. Run them serially to avoid
+# races on the global swap pipeline (worse on PG-config + CH-observability
+# splits where the snapshot write hops backends).
+e2e_functions_rest = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = 'test(test_otel_export)'
@@ -168,6 +176,10 @@ test-group = 'e2e_aws_sagemaker_openai'
 [[profile.default.overrides]]
 filter = 'binary(e2e) and test(providers::aws_sagemaker_tgi::)'
 test-group = 'e2e_aws_sagemaker_tgi'
+
+[[profile.default.overrides]]
+filter = 'binary(e2e) and test(endpoints::internal::functions_rest::)'
+test-group = 'e2e_functions_rest'
 
 [[profile.default.overrides]]
 filter = 'binary(e2e) and test(providers::groq::)'

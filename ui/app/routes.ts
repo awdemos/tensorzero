@@ -19,6 +19,8 @@ export default [
 
     route("inferences/count", "routes/api/inferences/count.route.ts"),
 
+    route("providers/available", "routes/api/providers/available.route.ts"),
+
     ...prefix("datasets", [
       route("counts", "routes/api/datasets/counts.route.ts"),
     ]),
@@ -197,8 +199,13 @@ export default [
   // API Keys
   route("api-keys", "routes/api-keys/route.tsx"),
 
-  // Config editor
-  route("config", "routes/config/route.tsx"),
+  // The legacy `/config` TOML editor route was removed alongside the
+  // `/internal/config_toml*` endpoints. Per-object UI views (functions,
+  // variants, models, …) are the replacement and are routed individually.
+
+  // Functions per-object views (Phase 2B)
+  route("functions", "routes/functions/route.tsx"),
+  route("functions/:name", "routes/functions/$name/route.tsx"),
 
   // Health
   route("health", "routes/health/route.tsx"),
