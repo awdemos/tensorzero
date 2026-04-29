@@ -54,14 +54,15 @@ export async function action({ request }: Route.ActionArgs) {
   }
 
   const name = String(formData.get("name") ?? "").trim();
-  const variant_name = String(formData.get("variant_name") ?? "").trim();
+  const variant_name =
+    String(formData.get("variant_name") ?? "").trim() || "default";
   const model = String(formData.get("model") ?? "").trim();
   const system_template = String(formData.get("system_template") ?? "");
 
-  if (!name || !variant_name || !model) {
+  if (!name || !model) {
     return {
       ok: false,
-      error: "Function name, first variant name, and model are required.",
+      error: "Function name and model are required.",
     };
   }
 
@@ -193,13 +194,20 @@ export default function FunctionsPage() {
                   </label>
 
                   <label className="flex flex-col gap-1.5 text-sm">
-                    <span className="font-medium">First variant name</span>
+                    <span className="font-medium">
+                      First variant name{" "}
+                      <span className="text-fg-muted font-normal">
+                        (optional)
+                      </span>
+                    </span>
                     <Input
                       name="variant_name"
                       placeholder="default"
-                      required
                       pattern="[A-Za-z0-9_\-:]+"
                     />
+                    <span className="text-fg-muted text-xs">
+                      Leave blank to use <code>default</code>.
+                    </span>
                   </label>
                 </div>
 

@@ -53,21 +53,39 @@ const PROVIDER_CATALOG: &[(&str, &str, &str, &[&str])] = &[
     // landing on the picker for the first time see something they're
     // likely to actually pick. Provider-specific IDs only — anything
     // exotic should go through the "Custom..." path in the UI.
+    //
+    // **Verification policy:** the OpenAI, Anthropic, and Google AI
+    // Studio entries below are verified against each provider's
+    // `/v1/models` listing as of 2026-04-29. The other providers' lists
+    // are best-effort and should be re-verified before they're shown to
+    // users — see `feedback_verify_model_ids` in memory.
     (
         "openai",
         "OpenAI",
         "OPENAI_API_KEY",
-        &["gpt-4.1-nano", "gpt-4.1-mini", "gpt-4.1", "o4-mini", "o3"],
+        &[
+            "gpt-4o-mini",
+            "gpt-4.1-mini",
+            "gpt-4.1",
+            "gpt-5.4-mini",
+            "gpt-5.5",
+            "o4-mini",
+            "o3",
+        ],
     ),
     (
         "anthropic",
         "Anthropic",
         "ANTHROPIC_API_KEY",
+        // No `*-latest` aliases — Anthropic retired them. Pin to the
+        // versioned IDs returned by the live `/v1/models` listing.
         &[
-            "claude-haiku-4-5",
-            "claude-sonnet-4-5",
-            "claude-opus-4-5",
-            "claude-3-5-haiku-latest",
+            "claude-haiku-4-5-20251001",
+            "claude-sonnet-4-5-20250929",
+            "claude-opus-4-5-20251101",
+            "claude-sonnet-4-6",
+            "claude-opus-4-6",
+            "claude-opus-4-7",
         ],
     ),
     (
@@ -78,6 +96,8 @@ const PROVIDER_CATALOG: &[(&str, &str, &str, &[&str])] = &[
             "gemini-2.5-flash-lite",
             "gemini-2.5-flash",
             "gemini-2.5-pro",
+            "gemini-3-pro-preview",
+            "gemini-3.1-pro-preview",
         ],
     ),
     (
@@ -90,6 +110,7 @@ const PROVIDER_CATALOG: &[(&str, &str, &str, &[&str])] = &[
             "gemini-2.5-flash-lite",
             "gemini-2.5-flash",
             "gemini-2.5-pro",
+            "gemini-3-pro-preview",
         ],
     ),
     (
@@ -98,11 +119,12 @@ const PROVIDER_CATALOG: &[(&str, &str, &str, &[&str])] = &[
         "GOOGLE_APPLICATION_CREDENTIALS",
         // Vertex pins Claude to `@YYYYMMDD` snapshots that lag Anthropic's
         // direct API by days/weeks. Verify in Vertex Model Garden when
-        // bumping these — date suffixes are not interchangeable.
+        // bumping — date suffixes are NOT interchangeable across the two
+        // surfaces.
         &[
             "claude-haiku-4-5@20251001",
             "claude-sonnet-4-5@20250929",
-            "claude-3-5-haiku@20241022",
+            "claude-opus-4-5@20251101",
         ],
     ),
     (
