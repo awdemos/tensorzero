@@ -8,16 +8,16 @@ Per-object tables (`function_configs`, `variant_configs`, `models_configs`, `too
 
 This mirrors the file-mode model exactly:
 
-| Concept                   | File / gitops mode                                | DB mode (per-object tables)                                                  |
-|---------------------------|---------------------------------------------------|------------------------------------------------------------------------------|
-| Live definition           | The TOML file at `HEAD`                           | Latest non-deleted row per name                                              |
-| History                   | `git log` / `git show <sha>:tensorzero.toml`      | Older rows ordered by `created_at`                                           |
-| "Who made the change"     | Git author                                        | `creation_source` + `source_autopilot_session_id`                            |
-| "Why the change"          | Git commit message                                | `metadata.notes` (harvested TOML comments in file-mode; UI textarea in DB-mode) |
-| Restoring an old shape    | `git checkout <sha>`                              | POST/PATCH the old config back via REST                                      |
-| Author-tagged revisions   | Git tags                                          | `version: u32` field on the function/variant config                          |
+| Concept                 | File / gitops mode                           | DB mode (per-object tables)                                                     |
+| ----------------------- | -------------------------------------------- | ------------------------------------------------------------------------------- |
+| Live definition         | The TOML file at `HEAD`                      | Latest non-deleted row per name                                                 |
+| History                 | `git log` / `git show <sha>:tensorzero.toml` | Older rows ordered by `created_at`                                              |
+| "Who made the change"   | Git author                                   | `creation_source` + `source_autopilot_session_id`                               |
+| "Why the change"        | Git commit message                           | `metadata.notes` (harvested TOML comments in file-mode; UI textarea in DB-mode) |
+| Restoring an old shape  | `git checkout <sha>`                         | POST/PATCH the old config back via REST                                         |
+| Author-tagged revisions | Git tags                                     | `version: u32` field on the function/variant config                             |
 
-Older rows are NOT addressable as separate live entities — no current snapshot points at them. They exist for auditability and restore, the same way `git show <old-sha>` exists for auditability and restore. **Multiple shapes are never simultaneously live under the same name.** If you want multiple shapes to be simultaneously routable, those are *variants*, not versions.
+Older rows are NOT addressable as separate live entities — no current snapshot points at them. They exist for auditability and restore, the same way `git show <old-sha>` exists for auditability and restore. **Multiple shapes are never simultaneously live under the same name.** If you want multiple shapes to be simultaneously routable, those are _variants_, not versions.
 
 The `version: u32` field on functions and variants is an editorial label — like a git tag. Bumping it is a deliberate authorial signal that the current shape has been iterated; it's part of the canonical content (and therefore part of the snapshot canonical hash). The system never auto-increments it; the UI may auto-increment on "Update" actions as a convenience.
 
