@@ -1511,10 +1511,10 @@ jobs:
       VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
       XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
 
-  # `live-tests-config-in-database` was removed alongside the legacy
-  # `/internal/config_toml*` endpoints; the lane below replaces it,
-  # focused on the empty-bootstrap path through the per-object REST
-  # endpoints (`/internal/functions`, `.../variants`).
+  # `live-tests-config-in-database` runs the standard live test suite
+  # against a gateway booted from a Postgres-backed config (loaded via
+  # `--migrate-config` from a TOML at startup). The empty-DB-no-files
+  # variant is `db-only-boot-e2e` below.
   live-tests-config-in-database:
     if: ${{ needs.detect-changes.outputs.live-tests == 'true' && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) }}
     needs:

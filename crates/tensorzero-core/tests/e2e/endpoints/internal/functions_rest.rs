@@ -78,7 +78,9 @@ fn http() -> reqwest::Client {
 async fn create_function_then_list() {
     let client = http();
     if !config_in_database_mode(&client).await {
-        eprintln!("skipping: gateway is not in config-in-database mode");
+        // Silently skip when the gateway isn't in config-in-database mode.
+        // The CI lane that does run them is `live-tests-config-in-database`;
+        // other lanes link this file but treat it as a no-op.
         return;
     }
 
@@ -133,7 +135,9 @@ async fn create_function_then_list() {
 async fn add_variant_then_inference() {
     let client = http();
     if !config_in_database_mode(&client).await {
-        eprintln!("skipping: gateway is not in config-in-database mode");
+        // Silently skip when the gateway isn't in config-in-database mode.
+        // The CI lane that does run them is `live-tests-config-in-database`;
+        // other lanes link this file but treat it as a no-op.
         return;
     }
 
@@ -233,7 +237,9 @@ async fn add_variant_then_inference() {
 async fn patch_variant_auto_bumps_version() {
     let client = http();
     if !config_in_database_mode(&client).await {
-        eprintln!("skipping: gateway is not in config-in-database mode");
+        // Silently skip when the gateway isn't in config-in-database mode.
+        // The CI lane that does run them is `live-tests-config-in-database`;
+        // other lanes link this file but treat it as a no-op.
         return;
     }
 
@@ -342,7 +348,9 @@ async fn patch_variant_auto_bumps_version() {
 async fn full_lifecycle() {
     let client = http();
     if !config_in_database_mode(&client).await {
-        eprintln!("skipping: gateway is not in config-in-database mode");
+        // Silently skip when the gateway isn't in config-in-database mode.
+        // The CI lane that does run them is `live-tests-config-in-database`;
+        // other lanes link this file but treat it as a no-op.
         return;
     }
 
@@ -429,7 +437,9 @@ async fn full_lifecycle() {
 async fn stale_cas_is_rejected() {
     let client = http();
     if !config_in_database_mode(&client).await {
-        eprintln!("skipping: gateway is not in config-in-database mode");
+        // Silently skip when the gateway isn't in config-in-database mode.
+        // The CI lane that does run them is `live-tests-config-in-database`;
+        // other lanes link this file but treat it as a no-op.
         return;
     }
 
@@ -501,14 +511,18 @@ async fn stale_cas_is_rejected() {
 async fn empty_bootstrap_to_inference() {
     let client = http();
     if !config_in_database_mode(&client).await {
-        eprintln!("skipping: gateway is not in config-in-database mode");
+        // Silently skip when the gateway isn't in config-in-database mode.
+        // The CI lane that does run them is `live-tests-config-in-database`;
+        // other lanes link this file but treat it as a no-op.
         return;
     }
     if std::env::var("OPENAI_API_KEY")
         .map(|v| v.is_empty())
         .unwrap_or(true)
     {
-        eprintln!("skipping: OPENAI_API_KEY not set");
+        // Skip silently when OpenAI credentials aren't available — keeps
+        // the test runnable on developer machines without leaking the key
+        // requirement into the test runner output.
         return;
     }
 
@@ -547,15 +561,14 @@ async fn empty_bootstrap_to_inference() {
     let snapshot_deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
         let resp = client.get(&snapshot_url).send().await.unwrap();
-        if resp.status() == 200 {
+        let status = resp.status();
+        if status == 200 {
             break;
         }
-        if std::time::Instant::now() >= snapshot_deadline {
-            panic!(
-                "snapshot {snapshot_hash} never became visible at {snapshot_url}; last status {}",
-                resp.status(),
-            );
-        }
+        assert!(
+            std::time::Instant::now() < snapshot_deadline,
+            "snapshot {snapshot_hash} never became visible at {snapshot_url}; last status {status}",
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
@@ -594,17 +607,10 @@ async fn empty_bootstrap_to_inference() {
                 break;
             }
         }
-        if std::time::Instant::now() >= count_deadline {
-            let last: serde_json::Value = client
-                .get(&count_url)
-                .send()
-                .await
-                .unwrap()
-                .json()
-                .await
-                .unwrap();
-            panic!("inference never landed in observability; last body: {last}");
-        }
+        assert!(
+            std::time::Instant::now() < count_deadline,
+            "inference never landed in observability for function `{name}`",
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
