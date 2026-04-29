@@ -75,11 +75,12 @@ pub(crate) async fn write_stored_config_in_tx(
     // (broken references, missing templates, schema errors, etc.) fail fast
     // without partial writes. We also return the resulting `UnwrittenConfig`
     // so callers can use its validated `Config` + hash directly (e.g. for the
-    // `apply_config_toml_handler` hot-swap) instead of re-reading + revalidating
-    // from the database on the happy path. Credential validation is skipped:
-    // the caller is responsible for deciding when to exercise provider
-    // credentials, since the write path runs under the `config_editor`
-    // advisory lock and shouldn't be making outbound network calls.
+    // post-write hot-swap on `--migrate-config`) instead of re-reading +
+    // revalidating from the database on the happy path. Credential validation
+    // is skipped: the caller is responsible for deciding when to exercise
+    // provider credentials, since the write path runs under the global
+    // stored-config advisory lock and shouldn't be making outbound network
+    // calls.
     let unwritten = Config::load_from_uninitialized(params.config.clone(), false).await?;
 
     // Acquire a single global advisory lock to serialize concurrent

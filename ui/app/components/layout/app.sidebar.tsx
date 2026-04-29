@@ -200,11 +200,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 )}
               </SidebarMenuItem>
             )}
-            {/* The legacy `/config` TOML editor link was removed alongside
-                `route.tsx` and the `/internal/config_toml*` endpoints.
-                Per-object UI views (functions, variants, models, …) are
-                the replacement; their sidebar entries live in
-                `navigation.map` below. */}
           </SidebarGroupContent>
         </SidebarGroup>
         {navigation

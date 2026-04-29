@@ -30,10 +30,12 @@ pub struct ConfigObjectMetadata {
 
     /// Who or what wrote this row. Conventionally one of:
     ///
-    /// - `"file-import"`               — file-mode `apply_config_toml`
-    /// - `"ui/<user-id>"`              — Phase 3 per-object UI
+    /// - `"file-import"`               — `gateway --migrate-config` import
+    ///                                    of an on-disk TOML
+    /// - `"rest/internal-api"`         — per-object REST endpoints
+    ///                                    (`/internal/functions/...`)
+    /// - `"ui/<user-id>"`              — UI-driven writes (when auth is on)
     /// - `"autopilot/<session-id>"`    — Autopilot's narrow REST writes
-    /// - `"rest/<credential-public-id>"` — direct REST callers
     pub created_by: Option<String>,
 
     /// UI-assigned tags for grouping and filtering. Indexed via a GIN

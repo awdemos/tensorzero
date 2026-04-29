@@ -41,11 +41,6 @@ not (test(batch) | test(test_dummy_only) | test(clickhouse::) | (test(db::) & !t
 '''
 junit.path = "junit.xml"
 
-# The `config-editing` profile was removed alongside the legacy
-# `/internal/config_toml*` endpoints (see roadmap "To delete (Phase 3
-# cleanup PR)"). Per-object REST endpoint tests run under the default
-# `[profile.e2e]` filter.
-
 # Run only the zero-config-boot e2e tests against a gateway that booted
 # from a migrated-but-empty Postgres with `ENABLE_CONFIG_IN_DATABASE=true`
 # and no `--config-file`. Runs in its own CI job

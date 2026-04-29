@@ -155,35 +155,27 @@ pub(super) async fn write_function_config_in_tx(
 
 /// Writes a function config version **without** the per-function CAS check.
 ///
-/// # Invariant: full-config bulk write path only
+/// # Invariant: bulk write path only
 ///
 /// This entry point must only ever be called from
-/// `write_stored_config_in_tx`, the bulk "apply a full editable TOML" path.
-/// That path provides equivalent protection at a higher level:
-///
-/// 1. It holds the global `config_editor` transaction-level advisory lock
-///    (`acquire_config_editor_lock` in `endpoints/internal/config.rs`), which
-///    serializes all config-editor writes — no other bulk or single-function
-///    UI-driven write can interleave.
-/// 2. It verifies the full editable-TOML signature against the `base_signature`
-///    the UI was editing from (see `apply_config_toml_handler`). If anything
-///    in the config has changed between the read and the write, the apply
-///    is rejected before we get here.
-///
-/// Together, those guarantees make the per-function CAS redundant: every
-/// function row we append is guaranteed to sit on top of the same state the
-/// caller snapshotted. Dropping the per-function CAS is also *necessary* in
-/// the bulk path because the bulk writer never reads the current function
-/// version IDs — it only has the `UninitializedConfig` — and there is no
-/// safe value to pass for `expected_current_version_id` on an existing row.
+/// `write_stored_config_in_tx`, the bulk "apply an entire `UninitializedConfig`"
+/// path used by `--migrate-config` (importing a TOML on disk into the DB)
+/// and the migrator-style API caller. That path takes the global
+/// `STORED_CONFIG_ADVISORY_LOCK_KEY` transaction-level advisory lock, which
+/// serializes all bulk writes against each other and against the per-object
+/// CAS path. Dropping the per-function CAS is necessary in the bulk path
+/// because the bulk writer never reads the current function version IDs —
+/// it only has the `UninitializedConfig` — and there is no safe value to
+/// pass for `expected_current_version_id` on an existing row.
 ///
 /// # Do not call from anywhere else
 ///
-/// Any single-function edit path (UI function editor, API) must go through
-/// `write_function_config` / `write_function_config_in_tx`, which enforces
-/// the CAS against a caller-supplied `expected_current_version_id`. Calling
-/// this skipping-CAS variant from such a path would allow concurrent writers
-/// to silently clobber each other's edits.
+/// Any single-function edit path (the per-object REST endpoints in
+/// `endpoints/internal/functions_rest.rs`, the UI function editor) must go
+/// through `write_function_config` / `write_function_config_in_tx`, which
+/// enforces the CAS against a caller-supplied `expected_current_version_id`.
+/// Calling this skipping-CAS variant from such a path would allow concurrent
+/// writers to silently clobber each other's edits.
 #[expect(
     clippy::too_many_arguments,
     reason = "internal entry threads provenance + metadata + CAS bypass through a single transaction"

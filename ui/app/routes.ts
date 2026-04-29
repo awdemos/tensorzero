@@ -199,11 +199,7 @@ export default [
   // API Keys
   route("api-keys", "routes/api-keys/route.tsx"),
 
-  // The legacy `/config` TOML editor route was removed alongside the
-  // `/internal/config_toml*` endpoints. Per-object UI views (functions,
-  // variants, models, …) are the replacement and are routed individually.
-
-  // Functions per-object views (Phase 2B)
+  // Per-object configuration views.
   route("functions", "routes/functions/route.tsx"),
   route("functions/:name", "routes/functions/$name/route.tsx"),
 

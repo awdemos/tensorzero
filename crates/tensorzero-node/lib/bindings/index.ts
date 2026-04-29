@@ -193,7 +193,6 @@ export * from "./GepaEvaluatorStats";
 export * from "./GepaToolOutput";
 export * from "./GepaToolParams";
 export * from "./GetCacheStatisticsResponse";
-export * from "./GetConfigTomlResponse";
 export * from "./GetConfigToolParams";
 export * from "./GetCumulativeFeedbackTimeseriesResponse";
 export * from "./GetDatapointCountResponse";

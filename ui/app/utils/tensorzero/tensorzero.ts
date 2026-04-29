@@ -640,11 +640,6 @@ export class TensorZeroClient extends BaseTensorZeroClient {
     return (await response.json()) as UiConfig;
   }
 
-  // The `getConfigToml`/`applyConfigToml`/`validateConfigToml` methods
-  // were removed alongside the `/internal/config_toml*` gateway endpoints
-  // and the legacy TOML editor route. Per-object UI views call narrow
-  // REST endpoints (`/internal/functions`, `/internal/variants`, …) instead.
-
   /**
    * Fetches inference count for a function, optionally filtered by variant or grouped by variant.
    * @param functionName - The name of the function to get count for
