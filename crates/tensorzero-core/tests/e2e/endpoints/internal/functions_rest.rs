@@ -128,11 +128,13 @@ async fn create_function_then_list() {
         .await;
 }
 
-/// `POST /internal/functions/{name}/variants` adds a second variant,
-/// `GET /internal/functions/{name}/variants` returns both, and
-/// `POST /inference` with `variant_name` routes to either.
+/// `POST /internal/functions/{name}/variants` adds a second variant
+/// and `GET /internal/functions/{name}/variants` returns both. The
+/// inference half of the round-trip lives in `empty_bootstrap_to_inference`,
+/// which uses a real provider — the `db-only-boot` CI lane runs the
+/// production gateway image, which has no `dummy::*` provider.
 #[tokio::test(flavor = "multi_thread")]
-async fn add_variant_then_inference() {
+async fn add_variant_then_list_both() {
     let client = http();
     if !config_in_database_mode(&client).await {
         // Silently skip when the gateway isn't in config-in-database mode.
@@ -200,26 +202,6 @@ async fn add_variant_then_inference() {
         names.contains(&"default") && names.contains(&"alt"),
         "expected both default and alt; got {names:?}"
     );
-
-    // Inference against each variant.
-    for variant in &["default", "alt"] {
-        let inference = client
-            .post(get_gateway_endpoint("/inference"))
-            .json(&serde_json::json!({
-                "function_name": name,
-                "variant_name": variant,
-                "input": { "messages": [{"role": "user", "content": "hi"}] }
-            }))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(
-            inference.status(),
-            200,
-            "inference against {variant} should 200; got body: {:?}",
-            inference.text().await.ok()
-        );
-    }
 
     // Cleanup — delete function (CAS).
     let _ = client
