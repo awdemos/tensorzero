@@ -44,9 +44,10 @@ jobs:
 
   socket-security:
     name: socket-security
-    # Skip on fork and Dependabot PRs because GitHub doesn't expos secrets to them, and the scan requires `SOCKET_SECURITY_API_KEY`.
-    # Always runs for `merge_group` where secrets are available.
-    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') }}
+    # Skip on fork PRs because GitHub doesn't expose secrets to them, and the
+    # scan requires `SOCKET_SECURITY_API_KEY`. Dependabot PRs are configured
+    # with the Dependabot secret, and `merge_group` runs in the base repo.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     environment: socket-security
     permissions:
