@@ -46,7 +46,7 @@ on:
         required: true
       DEEPSEEK_API_KEY:
         required: true
-      DOCKERHUB_TOKEN:
+      DOCKERHUB_DANGEROUS_TOKEN:
         required: true
       DOCKERHUB_USERNAME:
         required: true
@@ -124,7 +124,7 @@ jobs:
         uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.DOCKERHUB_DANGEROUS_TOKEN }}
 
       - name: Wake up ClickHouse cloud (for batch tests)
         env:
