@@ -57,7 +57,11 @@ optimize = "max"
     let snapshot =
         ConfigSnapshot::new_from_toml_string(&config_toml, extra_templates.clone()).unwrap();
 
-    let hash = snapshot.hash.clone();
+    // Lookup must use the canonical hash — it's what's in the
+    // CH `hash` column going forward, and what new PG rows index
+    // under `canonical_hash`. Old PG `hash` lookups still work,
+    // but tests are written against the new convention.
+    let hash = snapshot.config.canonical_hash().unwrap();
 
     conn.write_config_snapshot(&snapshot).await.unwrap();
     conn.sleep_for_writes_to_be_visible().await;
@@ -122,7 +126,11 @@ optimize = "max"
     let snapshot =
         ConfigSnapshot::new_from_toml_string(&config_toml, extra_templates.clone()).unwrap();
 
-    let hash = snapshot.hash.clone();
+    // Lookup must use the canonical hash — it's what's in the
+    // CH `hash` column going forward, and what new PG rows index
+    // under `canonical_hash`. Old PG `hash` lookups still work,
+    // but tests are written against the new convention.
+    let hash = snapshot.config.canonical_hash().unwrap();
 
     conn.write_config_snapshot(&snapshot).await.unwrap();
     conn.sleep_for_writes_to_be_visible().await;
@@ -297,8 +305,13 @@ optimize = "max"
     let snapshot =
         ConfigSnapshot::new_from_toml_string(&config_toml, extra_templates.clone()).unwrap();
 
-    let hash = snapshot.hash.clone();
-    let hash_number = hash.to_string();
+    // Lookup must use the canonical hash — it's what's in the
+    // CH `hash` column going forward.
+    let hash = snapshot.config.canonical_hash().unwrap();
+    // Raw SQL below uses `toUInt256('{hash_number}')`, which can't
+    // parse the `can:` prefix that `Display` adds — use the bare
+    // decimal form.
+    let hash_number = hash.to_decimal_string().to_string();
 
     clickhouse.write_config_snapshot(&snapshot).await.unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;

@@ -131,8 +131,12 @@ pub async fn write_config_handler(
     let mut snapshot = ConfigSnapshot::new(request.config, request.extra_templates)?;
     snapshot.tags = request.tags;
 
-    // Self-describing transport form via `Display`.
-    let hash = snapshot.hash.to_string();
+    // Compute and return the **canonical** hash so clients can pass it
+    // straight back to `GET /internal/config/{hash}`. The CH `hash`
+    // column was switched to hold canonical bytes; returning the legacy
+    // `snapshot.hash` here would round-trip into a 404.
+    let canonical_hash = snapshot.config.canonical_hash()?;
+    let hash = canonical_hash.to_string();
 
     app_state
         .validate_and_write_config_snapshot(&snapshot)
