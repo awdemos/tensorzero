@@ -44,8 +44,9 @@ jobs:
 
   socket-security:
     name: socket-security
-    # Skip on fork and Dependabot PRs because GitHub doesn't expose repo secrets to them.
-    # Always runs for `merge_group` and `workflow_dispatch` where secrets are available.
+    # Skip on fork and Dependabot PRs because GitHub doesn't expose repo/environment
+    # secrets to them, and the scan requires `SOCKET_SECURITY_API_KEY`.
+    # Always runs for `merge_group` where secrets are available.
     if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') }}
     runs-on: ubuntu-latest
     environment: socket-security
@@ -65,7 +66,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install Socket CLI
-        run: pip install socketsecurity --upgrade
+        run: pip install socketsecurity==2.2.86 --upgrade
 
       - name: Run Socket Security scan
         env:
