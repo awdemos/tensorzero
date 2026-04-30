@@ -728,10 +728,14 @@ async fn config_jsonb_gin_index_is_used_for_containment_queries() {
     let postgres = get_test_postgres().await;
     let pool = postgres.get_pool().unwrap();
 
-    // We can't force-run ANALYZE in a portable way and an empty table will
-    // always seq-scan, so seed a few rows first.
+    // Seed enough rows that the planner picks the GIN index naturally
+    // — same shape as production. Postgres's cost model prefers Seq
+    // Scan on small tables (≤ ~50 rows for jsonb `@>`), so we go well
+    // past that threshold. Each row is unique so the planner sees real
+    // selectivity rather than collapsing all rows into one bucket.
     let id = Uuid::now_v7();
-    for v in 1..=10 {
+    const SEED_ROWS: u32 = 200;
+    for v in 1..=SEED_ROWS {
         let toml = format!(
             r#"
 [models.m_{id}_{v}]
@@ -760,20 +764,6 @@ model = "m_{id}_{v}"
         .await
         .unwrap();
 
-    // The planner picks Seq Scan for tiny tables (a few rows). Force the
-    // index path so the test verifies the GIN index is *usable* —
-    // production tables are large enough that the planner will pick it
-    // unprompted.
-    let mut conn = pool.acquire().await.unwrap();
-    sqlx::query("SET LOCAL enable_seqscan = off")
-        .execute(&mut *conn)
-        .await
-        .unwrap();
-    sqlx::query("SET LOCAL enable_bitmapscan = on")
-        .execute(&mut *conn)
-        .await
-        .unwrap();
-
     // EXPLAIN the same query the trait runs.
     let needle = serde_json::json!({
         "functions": {
@@ -784,7 +774,7 @@ model = "m_{id}_{v}"
         r"EXPLAIN SELECT hash FROM tensorzero.config_snapshots WHERE config_jsonb @> $1",
     )
     .bind(&needle)
-    .fetch_all(&mut *conn)
+    .fetch_all(pool)
     .await
     .unwrap();
     let plan = plan_rows.join("\n");
