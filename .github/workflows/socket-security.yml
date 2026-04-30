@@ -6,12 +6,15 @@ on:
       SOCKET_SECURITY_API_KEY:
         required: true
 
+permissions: {}
+
 jobs:
   socket-security:
+    name: socket-security
     permissions:
-      issues: write
-      contents: read
-      pull-requests: write
+      issues: write # Socket CLI may open or update issues for new alerts.
+      contents: read # Required for checkout or repository metadata reads.
+      pull-requests: write # Socket CLI posts scan results as PR comments.
     runs-on: ubuntu-latest
     environment: socket-security
     steps:
@@ -30,12 +33,14 @@ jobs:
         env:
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
           GH_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER_INPUT: ${{ github.event.pull_request.number }}
         run: |
           PR_NUMBER=0
-          if [ "${{ github.event_name }}" == "pull_request" ]; then
-            PR_NUMBER=${{ github.event.pull_request.number }}
+          if [ "${EVENT_NAME}" == "pull_request" ]; then
+            PR_NUMBER="${PR_NUMBER_INPUT}"
           fi
           socketcli \
-            --target-path $GITHUB_WORKSPACE \
+            --target-path "$GITHUB_WORKSPACE" \
             --scm github \
-            --pr-number $PR_NUMBER
+            --pr-number "$PR_NUMBER"

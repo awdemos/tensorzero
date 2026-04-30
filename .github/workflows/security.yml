@@ -48,9 +48,9 @@ jobs:
     # Always runs for `merge_group` and `workflow_dispatch` where secrets are available.
     if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') }}
     permissions:
-      issues: write
-      contents: read
-      pull-requests: write
+      issues: write # Socket CLI may open or update issues for new alerts.
+      contents: read # Required for checkout or repository metadata reads.
+      pull-requests: write # Socket CLI posts scan results as PR comments.
     uses: ./.github/workflows/socket-security.yml
     secrets:
       SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
