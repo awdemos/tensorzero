@@ -54,13 +54,19 @@ impl ConfigQueries for ClickHouseConnectionInfo {
     }
 
     async fn write_config_snapshot(&self, snapshot: &ConfigSnapshot) -> Result<(), DelayedError> {
-        // The CH `hash` column is `UInt256`. We send the *decimal-only*
-        // form through the JSONEachRow body (`hash` field) and the
-        // inline literals in the merge subqueries — `SnapshotHash`'s
-        // `Display` / `Serialize` impls prefix `can:` for canonical
-        // hashes, which `toUInt256` cannot parse. Keeping the column
-        // bare-numeric is fine because the scheme is fixed by
-        // `SnapshotHash::scheme` per row.
+        // The CH `hash` column is `UInt256`. We send the decimal-only
+        // form through the JSONEachRow body and inline literals —
+        // `SnapshotHash`'s `Display` / `Serialize` impls prefix `can:`
+        // for canonical hashes, which `toUInt256` cannot parse.
+        //
+        // Going forward, CH only stores the **canonical** hash here:
+        // every reader (e.g. `/internal/config/{hash}`) routes through
+        // `Config.hash` which is now canonical (computed from the
+        // structural JSON form). Postgres has both `hash` (legacy) and
+        // `canonical_hash` columns; CH currently has one column. A
+        // follow-up adds a CH-side migration for parity (see task
+        // "ClickHouse parity for snapshot canonical_hash"). For now
+        // the column holds canonical bytes, matching the lookup.
         #[derive(Serialize)]
         struct ConfigSnapshotRow<'a> {
             config: &'a str,
@@ -70,7 +76,13 @@ impl ConfigQueries for ClickHouseConnectionInfo {
             tags: &'a HashMap<String, String>,
         }
 
-        let hash_decimal = snapshot.hash.to_decimal_string();
+        let canonical_hash = snapshot.config.canonical_hash().map_err(|e| {
+            DelayedError::new(ErrorDetails::Serialization {
+                message: format!("Failed to compute canonical hash: {e}"),
+            })
+        })?;
+        let hash_decimal = canonical_hash.to_decimal_string().to_string();
+        let hash_decimal = hash_decimal.as_str();
 
         let config_string = toml::to_string(&snapshot.config).map_err(|e| {
             DelayedError::new(ErrorDetails::Serialization {
