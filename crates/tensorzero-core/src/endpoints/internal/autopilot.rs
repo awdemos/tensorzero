@@ -348,9 +348,12 @@ pub async fn create_event_handler(
         .ok_or_else(|| Error::new(ErrorDetails::AutopilotUnavailable))?;
 
     // Construct the full request with deployment_id
-    // If starting a new session (nil session_id), include the current config hash
+    // If starting a new session (nil session_id), include the current
+    // config hash. Bare decimal — same convention used by `/status` and
+    // `/internal/config.hash` so the autopilot side can compare across
+    // surfaces without caring about the scheme prefix.
     let config_snapshot_hash = if session_id.is_nil() {
-        Some(app_state.config.hash.to_string())
+        Some(app_state.config.hash.to_decimal_string().to_string())
     } else {
         None
     };

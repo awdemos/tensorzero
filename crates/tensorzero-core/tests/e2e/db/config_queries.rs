@@ -1104,10 +1104,10 @@ model = "rt_{id}"
 
     // The display form, by contrast, MUST keep the `v2:` prefix so
     // callers can re-derive the scheme from a URL alone.
+    let displayed = canonical.to_string();
     assert!(
-        canonical.to_string().starts_with("v2:"),
-        "Display must carry the v2 prefix; got: {}",
-        canonical.to_string()
+        displayed.starts_with("v2:"),
+        "Display must carry the v2 prefix; got: {displayed}",
     );
 
     // Use the bytes from the canonical hash (deserializing the wire

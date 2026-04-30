@@ -133,7 +133,9 @@ pub async fn write_config_handler(
     let mut snapshot = ConfigSnapshot::new(request.config, request.extra_templates)?;
     snapshot.tags = request.tags;
 
-    let hash = snapshot.hash.to_string();
+    // Bare decimal — consistent with `/status.config_hash` and
+    // `GET /internal/config.hash`. Display would prefix the scheme.
+    let hash = snapshot.hash.to_decimal_string().to_string();
 
     app_state
         .validate_and_write_config_snapshot(&snapshot)
