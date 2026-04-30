@@ -1729,6 +1729,16 @@ impl Config {
             }
         }
 
+        // `Config.hash` is the canonical hash (computed from the
+        // structural JSON form of `StoredConfig`), not the legacy
+        // canonical-TOML-bytes hash carried by `snapshot.hash`. Going
+        // forward this is the hash every caller sees — `/status`,
+        // `/internal/config`, autopilot tags, and the `snapshot_hash`
+        // value written into every new inference / feedback / datapoint
+        // row. Old rows continue to have their original (legacy) bytes
+        // and are still findable via the legacy lookup path; new rows
+        // have canonical bytes.
+        let canonical_hash = snapshot.config.canonical_hash()?;
         let mut config = Config {
             gateway: gateway_config,
             clickhouse,
@@ -1746,7 +1756,7 @@ impl Config {
             rate_limiting: rate_limiting.try_into()?,
             http_client,
             autopilot,
-            hash: snapshot.hash.clone(),
+            hash: canonical_hash,
             loading_errors,
         };
 
