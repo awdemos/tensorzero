@@ -46,7 +46,12 @@ impl GetConfigResponse {
             })
         })?;
         Ok(Self {
-            hash: snapshot.hash.to_string(),
+            // The UI expects the bare decimal form here so it can run
+            // `decimalToHex` on it for in-app URL routing. Display now
+            // prefixes the scheme (`v1:`/`v2:`) for transport identifiers,
+            // which is the wrong form for this response — keep the
+            // legacy decimal-only convention.
+            hash: snapshot.hash.to_decimal_string().to_string(),
             config,
             extra_templates: snapshot.extra_templates,
             tags: snapshot.tags,

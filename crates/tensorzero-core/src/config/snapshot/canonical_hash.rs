@@ -82,7 +82,11 @@ pub(crate) fn canonical_hash_value(value: &Value) -> SnapshotHash {
     let mut hasher = Hasher::new();
     hash_value_into(&mut hasher, value);
     let hash = hasher.finalize();
-    SnapshotHash::from_biguint(BigUint::from_bytes_be(hash.as_bytes()))
+    // Tag the resulting hash as `Canonical` so callers (URL routing,
+    // dispatch on scheme) can tell it apart from a `LegacyToml` hash.
+    // Using `from_biguint` here would default the scheme to LegacyToml
+    // and lose the round-trip identity.
+    SnapshotHash::from_biguint_canonical(BigUint::from_bytes_be(hash.as_bytes()))
 }
 
 fn hash_value_into(hasher: &mut Hasher, value: &Value) {

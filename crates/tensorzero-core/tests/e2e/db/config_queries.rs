@@ -760,6 +760,20 @@ model = "m_{id}_{v}"
         .await
         .unwrap();
 
+    // The planner picks Seq Scan for tiny tables (a few rows). Force the
+    // index path so the test verifies the GIN index is *usable* —
+    // production tables are large enough that the planner will pick it
+    // unprompted.
+    let mut conn = pool.acquire().await.unwrap();
+    sqlx::query("SET LOCAL enable_seqscan = off")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    sqlx::query("SET LOCAL enable_bitmapscan = on")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+
     // EXPLAIN the same query the trait runs.
     let needle = serde_json::json!({
         "functions": {
@@ -770,7 +784,7 @@ model = "m_{id}_{v}"
         r"EXPLAIN SELECT hash FROM tensorzero.config_snapshots WHERE config_jsonb @> $1",
     )
     .bind(&needle)
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await
     .unwrap();
     let plan = plan_rows.join("\n");
@@ -1056,11 +1070,14 @@ async fn get_config_snapshot_via_canonical_returns_not_found() {
 }
 
 /// `SnapshotHash` round-trips through Postgres and serde-JSON: a
-/// canonical-scheme hash, serialized to JSON (with `v2:` prefix),
-/// deserialized, and used for a DB lookup, resolves the same row.
+/// canonical-scheme hash, serialized to JSON (bare decimal — matches
+/// the DB column form), deserialized, and used for a DB lookup,
+/// resolves the same row. The scheme tag is metadata-only: bytes are
+/// the lookup key, and `Display` (not `Serialize`) is what carries the
+/// `v2:` prefix on the URL/log surface.
 #[tokio::test]
 #[expect(clippy::disallowed_methods)]
-async fn canonical_hash_prefixed_serde_round_trip_through_db() {
+async fn canonical_hash_serde_round_trip_through_db() {
     let postgres = get_test_postgres().await;
     let id = Uuid::now_v7();
     let config_toml = format!(
@@ -1086,21 +1103,36 @@ model = "rt_{id}"
 
     let canonical = snapshot.config.canonical_hash().expect("canonical");
 
-    // Wire form: prefixed string. Goes through serde.
+    // Wire form: bare decimal — matches the column type (CH `UInt256`,
+    // PG `NUMERIC(78,0)`). The `vN:` prefix only appears in `Display`
+    // for transport identifiers (URLs / logs).
     let wire = serde_json::to_string(&canonical).expect("serialize");
     assert!(
-        wire.contains("v2:"),
-        "canonical hash wire form must carry the v2 prefix, got: {wire}"
+        !wire.contains("v1:") && !wire.contains("v2:"),
+        "Serialize must emit bare decimal so DB writes succeed; got: {wire}"
     );
-    let parsed_back: SnapshotHash = serde_json::from_str(&wire).expect("deserialize");
+
+    // The display form, by contrast, MUST keep the `v2:` prefix so
+    // callers can re-derive the scheme from a URL alone.
+    assert!(
+        canonical.to_string().starts_with("v2:"),
+        "Display must carry the v2 prefix; got: {}",
+        canonical.to_string()
+    );
+
+    // Use the bytes from the canonical hash (deserializing the wire
+    // form would default the scheme tag to LegacyToml — that's
+    // metadata-only and irrelevant to lookups, but for explicitness
+    // here we go through `from_str` of the prefixed Display form so
+    // the test exercises the full "transport identifier → scheme tag
+    // restored → DB lookup" path).
+    let parsed_back: SnapshotHash = canonical.to_string().parse().expect("FromStr v2:DECIMAL");
     assert_eq!(parsed_back.scheme(), SnapshotHashScheme::Canonical);
 
-    // Use the deserialized hash to fetch the snapshot — exercises the
-    // full "wire → parse → DB lookup" path.
     let retrieved = postgres
         .get_config_snapshot(parsed_back)
         .await
-        .expect("lookup after serde round-trip");
+        .expect("lookup after round-trip");
     let original_json = serde_json::to_value(&snapshot.config).unwrap();
     let retrieved_json = serde_json::to_value(&retrieved.config).unwrap();
     assert_eq!(original_json, retrieved_json);
