@@ -596,6 +596,63 @@ async fn empty_bootstrap_to_inference() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
+    // Verify the inference row's `snapshot_hash` is the **canonical
+    // hash**, not the legacy hash. This is the load-bearing property
+    // of the canonical-by-default migration: every new inference /
+    // feedback / datapoint row writes `Config.hash` as its
+    // `snapshot_hash`, and `Config.hash` is now canonical.
+    //
+    // `InferenceMetadata.snapshot_hash` is the lowercase hex form of
+    // the row's bytes (see `impl FromRow for InferenceMetadata`).
+    // The live `Config.hash` from `/status` carries the `can:` prefix
+    // and the bare-decimal form. We convert the live hash's decimal
+    // back to bytes (via the FromStr → as_bytes path) and hex it to
+    // compare apples-to-apples.
+    let metadata_url = get_gateway_endpoint(&format!(
+        "/internal/inference_metadata?function_name={name}"
+    ));
+    let metadata: serde_json::Value = client
+        .get(&metadata_url)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let inference_meta = metadata
+        .get("inference_metadata")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .expect("at least one inference_metadata row");
+    let stored_hex = inference_meta
+        .get("snapshot_hash")
+        .and_then(|v| v.as_str())
+        .expect("inference row should carry a snapshot_hash");
+
+    let status: serde_json::Value = client
+        .get(get_gateway_endpoint("/status"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let live_hash = status
+        .get("config_hash")
+        .and_then(|v| v.as_str())
+        .expect("status response should carry config_hash");
+    assert!(
+        live_hash.starts_with("can:"),
+        "status.config_hash must carry the `can:` prefix (canonical-by-default); got: {live_hash}",
+    );
+    let live_canonical: tensorzero_core::config::snapshot::SnapshotHash =
+        live_hash.parse().expect("FromStr on can:DECIMAL");
+    assert_eq!(
+        stored_hex,
+        live_canonical.to_hex_string(),
+        "inference row's snapshot_hash must equal the bytes of the live canonical Config.hash",
+    );
+
     // Cleanup.
     let _ = client
         .delete(get_gateway_endpoint(&format!("/internal/functions/{name}")))
