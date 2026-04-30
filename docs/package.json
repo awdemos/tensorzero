@@ -2,6 +2,7 @@
   "name": "tensorzero-docs",
   "private": true,
   "dependencies": {
+    "-": "^0.0.1",
     "mint": "4.2.434"
   },
   "pnpm": {
