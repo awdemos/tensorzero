@@ -58,10 +58,9 @@ impl UiConfig {
                 .map(|(k, v)| (k.clone(), Arc::clone(v)))
                 .collect(),
             model_names: config.models.table.keys().map(|s| s.to_string()).collect(),
-            // Bare decimal: matches `/status.config_hash` and
-            // `/internal/config.hash`, which is what the UI compares
-            // against and runs through `decimalToHex` for URL routing.
-            config_hash: config.hash.to_decimal_string().to_string(),
+            // Self-describing transport form via `Display`. UI strips
+            // the `can:` prefix when converting to hex.
+            config_hash: config.hash.to_string(),
             config_in_database,
         }
     }
@@ -72,8 +71,7 @@ impl UiConfig {
     /// metrics, model names), skipping heavy initialization like model credentials, HTTP
     /// clients, gateway config, object store, and rate limiting.
     pub fn from_snapshot(snapshot: ConfigSnapshot) -> Result<Self, Error> {
-        // Bare decimal — same convention as the live-config branch above.
-        let hash = snapshot.hash.to_decimal_string().to_string();
+        let hash = snapshot.hash.to_string();
         let uninit_config: UninitializedConfig =
             snapshot.config.try_into().map_err(|e: &'static str| {
                 Error::new(ErrorDetails::Config {

@@ -28,13 +28,30 @@ pub enum SnapshotHashScheme {
 }
 
 impl SnapshotHashScheme {
-    /// Stable string prefix used in the display, parse, and serde forms.
-    /// Going forward, every hash carries its prefix on the wire so the
-    /// reader can route to the correct column.
-    pub const fn prefix(self) -> &'static str {
+    /// Stable string prefix used in the display and serde forms.
+    ///
+    /// Wire convention:
+    /// - `Canonical` carries the `can:` prefix (e.g. `can:14940...`).
+    /// - `LegacyToml` is **unprefixed** — same as the form every
+    ///   pre-canonical-hash writer used. This means existing
+    ///   `inferences.snapshot_hash` rows, autopilot tags, log lines,
+    ///   etc. parse unchanged.
+    ///
+    /// `prefix()` returns `None` for legacy because the legacy form has
+    /// no prefix on the wire. Callers that want a stable label for
+    /// logging or matching can use `name()` instead.
+    pub const fn prefix(self) -> Option<&'static str> {
         match self {
-            SnapshotHashScheme::LegacyToml => "v1",
-            SnapshotHashScheme::Canonical => "v2",
+            SnapshotHashScheme::LegacyToml => None,
+            SnapshotHashScheme::Canonical => Some("can"),
+        }
+    }
+
+    /// Human-readable scheme name for log/error messages. Stable.
+    pub const fn name(self) -> &'static str {
+        match self {
+            SnapshotHashScheme::LegacyToml => "legacy",
+            SnapshotHashScheme::Canonical => "canonical",
         }
     }
 }
@@ -137,11 +154,14 @@ impl SnapshotHash {
 
 impl std::fmt::Display for SnapshotHash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Always prefix the display form with the scheme. This is the
-        // self-describing identifier callers pass around — URLs, log
-        // lines, REST bodies — so the receiving side can route to the
-        // correct column without OOB context.
-        write!(f, "{}:{}", self.scheme.prefix(), self.decimal_str)
+        // Self-describing transport form. Canonical hashes carry a
+        // `can:` prefix; legacy hashes are bare decimal (matching the
+        // pre-canonical-hash wire format so existing systems don't
+        // need to change).
+        match self.scheme.prefix() {
+            Some(prefix) => write!(f, "{prefix}:{}", self.decimal_str),
+            None => write!(f, "{}", self.decimal_str),
+        }
     }
 }
 
@@ -150,48 +170,58 @@ impl Serialize for SnapshotHash {
     where
         S: serde::Serializer,
     {
-        // Emit the **bare decimal** form (no `vN:` prefix). Two reasons:
-        //
-        // 1. ClickHouse interns `snapshot_hash` as `UInt256`, and the
-        //    JSONEachRow body we send over the wire on every inference /
-        //    feedback / dataset insert is parsed by CH into that column.
-        //    A `"v1:DECIMAL"` string fails CH's number parser.
-        // 2. Postgres `snapshot_hash` columns are `NUMERIC(78,0)`. Same
-        //    issue — bare decimal is the only form Postgres can implicitly
-        //    coerce.
-        //
-        // Self-describing transport identifiers (URLs, log lines, REST
-        // response bodies that pass a hash for clients to round-trip back)
-        // use `Display` instead, which prefixes the scheme. `FromStr` /
-        // `Deserialize` accept both forms, so consumers don't care which
-        // one the producer used.
-        serializer.serialize_str(&self.decimal_str)
+        // Mirrors `Display`: the wire form is the self-describing
+        // identifier (`can:DECIMAL` for canonical, bare decimal for
+        // legacy). DB-row structs that write to numeric columns
+        // (`UInt256` / `NUMERIC(78,0)`) cannot accept the prefix and
+        // must opt out via `#[serde(serialize_with = "serialize_hash_bare_decimal")]`
+        // — the helper lives in this module.
+        serializer.collect_str(self)
     }
+}
+
+/// Custom serializer for `Option<SnapshotHash>` fields that go directly
+/// into numeric DB columns (`UInt256`, `NUMERIC(78,0)`). Emits the bare
+/// decimal — the prefix would fail the column's numeric parser.
+///
+/// Use as `#[serde(serialize_with = "tensorzero_types::snapshot::serialize_optional_hash_bare_decimal")]`.
+pub fn serialize_optional_hash_bare_decimal<S>(
+    hash: &Option<SnapshotHash>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match hash {
+        Some(h) => serializer.serialize_str(h.to_decimal_string()),
+        None => serializer.serialize_none(),
+    }
+}
+
+/// Like `serialize_optional_hash_bare_decimal` but for non-`Option` fields.
+pub fn serialize_hash_bare_decimal<S>(hash: &SnapshotHash, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(hash.to_decimal_string())
 }
 
 impl std::str::FromStr for SnapshotHash {
     type Err = num_bigint::ParseBigIntError;
 
     /// Accepts:
-    /// - `"v1:DECIMAL"` → `LegacyToml`
-    /// - `"v2:DECIMAL"` → `Canonical`
-    /// - `"DECIMAL"`    → `LegacyToml` (legacy unprefixed form, kept for
-    ///   backward compat with rows written before prefixing began)
+    /// - `"can:DECIMAL"` → `Canonical`
+    /// - `"DECIMAL"`     → `LegacyToml` (the pre-canonical-hash wire form;
+    ///   stays unprefixed so existing tags / rows / URLs parse unchanged)
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Some(rest) = s.strip_prefix("v1:") {
-            let big_int = rest.parse::<BigUint>()?;
-            Ok(SnapshotHash::from_biguint_with_scheme(
-                big_int,
-                SnapshotHashScheme::LegacyToml,
-            ))
-        } else if let Some(rest) = s.strip_prefix("v2:") {
+        if let Some(rest) = s.strip_prefix("can:") {
             let big_int = rest.parse::<BigUint>()?;
             Ok(SnapshotHash::from_biguint_with_scheme(
                 big_int,
                 SnapshotHashScheme::Canonical,
             ))
         } else {
-            // Unprefixed: legacy decimal form. Treat as LegacyToml.
+            // Bare decimal: legacy form.
             let big_int = s.parse::<BigUint>()?;
             Ok(SnapshotHash::from_biguint_with_scheme(
                 big_int,
@@ -267,12 +297,24 @@ mod tests {
     use std::str::FromStr;
 
     #[test]
-    fn display_includes_scheme_prefix() {
+    fn display_form_is_self_describing() {
+        // Legacy: bare decimal (matches every pre-canonical-hash writer
+        // — `inferences.snapshot_hash` rows, autopilot tags, log lines).
         let legacy = SnapshotHash::from_bytes(&[0xAB; 32]);
-        assert!(legacy.to_string().starts_with("v1:"));
+        let legacy_str = legacy.to_string();
+        assert!(
+            !legacy_str.starts_with("can:"),
+            "legacy display must be bare decimal; got {legacy_str}",
+        );
+        assert!(legacy_str.parse::<BigUint>().is_ok());
 
+        // Canonical: `can:DECIMAL`.
         let canonical = SnapshotHash::from_canonical_bytes(&[0xAB; 32]);
-        assert!(canonical.to_string().starts_with("v2:"));
+        let canonical_str = canonical.to_string();
+        assert!(
+            canonical_str.starts_with("can:"),
+            "canonical display must start with `can:`; got {canonical_str}",
+        );
     }
 
     #[test]
@@ -307,10 +349,11 @@ mod tests {
     }
 
     #[test]
-    fn unprefixed_decimal_parses_as_legacy() {
+    fn bare_decimal_parses_as_legacy() {
         // Backwards-compat path: an `inferences.snapshot_hash` column on a
         // pre-migration row stores the decimal form WITHOUT a prefix.
-        // Parsing it must yield a legacy-scheme hash.
+        // Parsing it must yield a legacy-scheme hash. This is the
+        // *normal* legacy wire form, not a special exception.
         let bytes = [0xCD; 32];
         let big_int = BigUint::from_bytes_be(&bytes);
         let raw_decimal = big_int.to_string();
@@ -321,39 +364,72 @@ mod tests {
     }
 
     #[test]
-    fn serde_emits_bare_decimal_and_preserves_bytes() {
-        // Wire form is the bare decimal — matches the DB column type
-        // (`UInt256` on CH, `NUMERIC(78,0)` on PG). The scheme tag is
-        // metadata-only at serialize time; consumers that need to know
-        // which algorithm produced the hash can carry that out-of-band
-        // or use `Display` (which DOES prefix).
+    fn serde_round_trip_preserves_scheme() {
+        // Wire form mirrors `Display`: legacy is bare decimal, canonical
+        // is `can:DECIMAL`. Both forms round-trip through serde and
+        // recover the original scheme tag — that's the contract callers
+        // depend on for routing lookups to the right column.
         let canonical = SnapshotHash::from_canonical_bytes(&[0x88; 32]);
         let json = serde_json::to_string(&canonical).expect("serialize");
         assert!(
-            !json.contains("v1:") && !json.contains("v2:"),
-            "Serialize must emit bare decimal so DB writes succeed; got {json}",
+            json.contains("can:"),
+            "canonical wire form must carry the `can:` prefix; got {json}",
         );
-
-        // The bytes round-trip even though the scheme tag does not. That's
-        // intentional: the lookup key for snapshot rows is the bytes, and
-        // every reader does its own canonicalization for fresh writes.
         let back: SnapshotHash = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back.as_bytes(), canonical.as_bytes());
-        // FromStr defaults unprefixed → LegacyToml, so the scheme is lost
-        // through this round-trip. Document and guard against future
-        // regressions if we ever need to change this.
-        assert_eq!(back.scheme(), SnapshotHashScheme::LegacyToml);
+        assert_eq!(back, canonical);
+        assert_eq!(back.scheme(), SnapshotHashScheme::Canonical);
+
+        let legacy = SnapshotHash::from_bytes(&[0x77; 32]);
+        let json_legacy = serde_json::to_string(&legacy).expect("serialize legacy");
+        assert!(
+            !json_legacy.contains("can:"),
+            "legacy wire form must be bare decimal; got {json_legacy}",
+        );
+        let back_legacy: SnapshotHash = serde_json::from_str(&json_legacy).expect("deserialize");
+        assert_eq!(back_legacy, legacy);
+    }
+
+    #[test]
+    fn bare_decimal_helper_strips_prefix() {
+        // The DB-row helper opt-out: numeric columns can't accept the
+        // `can:` prefix, so DB-row structs annotated with
+        // `serialize_with = "serialize_optional_hash_bare_decimal"`
+        // emit just the digits.
+        #[derive(Serialize)]
+        struct Row {
+            #[serde(serialize_with = "serialize_optional_hash_bare_decimal")]
+            snapshot_hash: Option<SnapshotHash>,
+        }
+        let canonical = SnapshotHash::from_canonical_bytes(&[0x99; 32]);
+        let row = Row {
+            snapshot_hash: Some(canonical.clone()),
+        };
+        let json = serde_json::to_string(&row).unwrap();
+        assert!(
+            !json.contains("can:"),
+            "DB-row helper must strip the prefix; got {json}",
+        );
+        // The decimal *digits* are present.
+        assert!(json.contains(canonical.to_decimal_string()));
+
+        let none_row = Row {
+            snapshot_hash: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&none_row).unwrap(),
+            r#"{"snapshot_hash":null}"#
+        );
     }
 
     #[test]
     fn display_keeps_scheme_prefix_for_url_round_trips() {
         // Display is the transport identifier callers paste into URLs
-        // (`/internal/config/{hash}`) and log lines. It MUST keep the
-        // scheme prefix so the receiving side knows which scheme the
-        // hash was computed under.
+        // (`/internal/config/{hash}`) and log lines. Canonical hashes
+        // carry the `can:` prefix so the receiving side knows which
+        // scheme produced the hash.
         let canonical = SnapshotHash::from_canonical_bytes(&[0x77; 32]);
         let displayed = canonical.to_string();
-        assert!(displayed.starts_with("v2:"), "got {displayed}");
+        assert!(displayed.starts_with("can:"), "got {displayed}");
 
         let parsed = SnapshotHash::from_str(&displayed).expect("FromStr");
         assert_eq!(parsed.scheme(), SnapshotHashScheme::Canonical);

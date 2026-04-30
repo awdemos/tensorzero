@@ -23,11 +23,10 @@ impl ConfigQueries for ClickHouseConnectionInfo {
         }
 
         // ClickHouse stores `hash` as `UInt256`; only the decimal digits are
-        // valid input to `toUInt256(...)`. The `Display` form prefixes the
-        // scheme (`v1:` / `v2:`) for transport, so use `to_decimal_string()`
-        // for the SQL literal. The error message keeps the prefixed
-        // `Display` form so callers can route the not-found between
-        // backends.
+        // valid input to `toUInt256(...)`. The `Display` form prefixes
+        // `can:` for canonical hashes (legacy is bare decimal already),
+        // so use `to_decimal_string()` for the SQL literal. The error
+        // message uses `Display` so callers can tell schemes apart.
         let hash_decimal = snapshot_hash.to_decimal_string();
         let query = format!(
             "SELECT config, extra_templates, tags \
@@ -55,14 +54,13 @@ impl ConfigQueries for ClickHouseConnectionInfo {
     }
 
     async fn write_config_snapshot(&self, snapshot: &ConfigSnapshot) -> Result<(), DelayedError> {
-        // The CH `hash` column is `UInt256`. We send the *decimal-only* form
-        // through both the JSONEachRow body (`hash` field) and the inline
-        // literals in the merge subqueries — `SnapshotHash`'s `Display` /
-        // `Serialize` impls prefix the scheme (`v1:` / `v2:`) for transport
-        // identifiers, which `toUInt256` cannot parse. Keeping the column
-        // bare-numeric is fine because the per-write scheme is fixed by
-        // `SnapshotHash::scheme` and we can only ever encounter one scheme
-        // per row.
+        // The CH `hash` column is `UInt256`. We send the *decimal-only*
+        // form through the JSONEachRow body (`hash` field) and the
+        // inline literals in the merge subqueries — `SnapshotHash`'s
+        // `Display` / `Serialize` impls prefix `can:` for canonical
+        // hashes, which `toUInt256` cannot parse. Keeping the column
+        // bare-numeric is fine because the scheme is fixed by
+        // `SnapshotHash::scheme` per row.
         #[derive(Serialize)]
         struct ConfigSnapshotRow<'a> {
             config: &'a str,

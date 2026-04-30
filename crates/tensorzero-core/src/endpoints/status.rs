@@ -25,12 +25,10 @@ pub async fn status_handler(State(app_state): AppState) -> Json<StatusResponse> 
     Json(StatusResponse {
         status: "ok".to_string(),
         version: TENSORZERO_VERSION.to_string(),
-        // Bare decimal — same convention as `GET /internal/config.hash`.
-        // Display would prefix the scheme (`v1:`/`v2:`) for transport
-        // identifiers, but `/status.config_hash` is read by the UI's
-        // `decimalToHex` and compared against `/internal/config.hash`,
-        // both of which expect the bare numeric form.
-        config_hash: app_state.config.hash.to_decimal_string().to_string(),
+        // Self-describing transport form via `Display`: legacy hashes
+        // are bare decimal (matching every pre-canonical-hash writer);
+        // canonical hashes carry the `can:` prefix.
+        config_hash: app_state.config.hash.to_string(),
     })
 }
 

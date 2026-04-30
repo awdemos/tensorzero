@@ -46,12 +46,10 @@ impl GetConfigResponse {
             })
         })?;
         Ok(Self {
-            // The UI expects the bare decimal form here so it can run
-            // `decimalToHex` on it for in-app URL routing. Display now
-            // prefixes the scheme (`v1:`/`v2:`) for transport identifiers,
-            // which is the wrong form for this response — keep the
-            // legacy decimal-only convention.
-            hash: snapshot.hash.to_decimal_string().to_string(),
+            // Self-describing transport form via `Display`. The UI
+            // strips the `can:` prefix when it needs to convert to
+            // hex; routes accept either form via `FromStr`.
+            hash: snapshot.hash.to_string(),
             config,
             extra_templates: snapshot.extra_templates,
             tags: snapshot.tags,
@@ -133,9 +131,8 @@ pub async fn write_config_handler(
     let mut snapshot = ConfigSnapshot::new(request.config, request.extra_templates)?;
     snapshot.tags = request.tags;
 
-    // Bare decimal — consistent with `/status.config_hash` and
-    // `GET /internal/config.hash`. Display would prefix the scheme.
-    let hash = snapshot.hash.to_decimal_string().to_string();
+    // Self-describing transport form via `Display`.
+    let hash = snapshot.hash.to_string();
 
     app_state
         .validate_and_write_config_snapshot(&snapshot)
