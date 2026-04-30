@@ -150,8 +150,22 @@ impl Serialize for SnapshotHash {
     where
         S: serde::Serializer,
     {
-        // Mirrors `Display`: prefixed form on the wire.
-        serializer.collect_str(self)
+        // Emit the **bare decimal** form (no `vN:` prefix). Two reasons:
+        //
+        // 1. ClickHouse interns `snapshot_hash` as `UInt256`, and the
+        //    JSONEachRow body we send over the wire on every inference /
+        //    feedback / dataset insert is parsed by CH into that column.
+        //    A `"v1:DECIMAL"` string fails CH's number parser.
+        // 2. Postgres `snapshot_hash` columns are `NUMERIC(78,0)`. Same
+        //    issue — bare decimal is the only form Postgres can implicitly
+        //    coerce.
+        //
+        // Self-describing transport identifiers (URLs, log lines, REST
+        // response bodies that pass a hash for clients to round-trip back)
+        // use `Display` instead, which prefixes the scheme. `FromStr` /
+        // `Deserialize` accept both forms, so consumers don't care which
+        // one the producer used.
+        serializer.serialize_str(&self.decimal_str)
     }
 }
 
@@ -307,13 +321,42 @@ mod tests {
     }
 
     #[test]
-    fn serde_round_trip_preserves_scheme() {
+    fn serde_emits_bare_decimal_and_preserves_bytes() {
+        // Wire form is the bare decimal — matches the DB column type
+        // (`UInt256` on CH, `NUMERIC(78,0)` on PG). The scheme tag is
+        // metadata-only at serialize time; consumers that need to know
+        // which algorithm produced the hash can carry that out-of-band
+        // or use `Display` (which DOES prefix).
         let canonical = SnapshotHash::from_canonical_bytes(&[0x88; 32]);
         let json = serde_json::to_string(&canonical).expect("serialize");
-        // Wire form is the prefixed string.
-        assert!(json.contains("v2:"));
+        assert!(
+            !json.contains("v1:") && !json.contains("v2:"),
+            "Serialize must emit bare decimal so DB writes succeed; got {json}",
+        );
+
+        // The bytes round-trip even though the scheme tag does not. That's
+        // intentional: the lookup key for snapshot rows is the bytes, and
+        // every reader does its own canonicalization for fresh writes.
         let back: SnapshotHash = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back, canonical);
-        assert_eq!(back.scheme(), SnapshotHashScheme::Canonical);
+        assert_eq!(back.as_bytes(), canonical.as_bytes());
+        // FromStr defaults unprefixed → LegacyToml, so the scheme is lost
+        // through this round-trip. Document and guard against future
+        // regressions if we ever need to change this.
+        assert_eq!(back.scheme(), SnapshotHashScheme::LegacyToml);
+    }
+
+    #[test]
+    fn display_keeps_scheme_prefix_for_url_round_trips() {
+        // Display is the transport identifier callers paste into URLs
+        // (`/internal/config/{hash}`) and log lines. It MUST keep the
+        // scheme prefix so the receiving side knows which scheme the
+        // hash was computed under.
+        let canonical = SnapshotHash::from_canonical_bytes(&[0x77; 32]);
+        let displayed = canonical.to_string();
+        assert!(displayed.starts_with("v2:"), "got {displayed}");
+
+        let parsed = SnapshotHash::from_str(&displayed).expect("FromStr");
+        assert_eq!(parsed.scheme(), SnapshotHashScheme::Canonical);
+        assert_eq!(parsed.as_bytes(), canonical.as_bytes());
     }
 }

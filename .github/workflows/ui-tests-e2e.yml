@@ -608,4 +608,3 @@ jobs:
             ui/playwright-report/
             ui/test-results/
           retention-days: 7
-
