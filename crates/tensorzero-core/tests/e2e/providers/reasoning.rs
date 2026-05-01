@@ -892,7 +892,7 @@ pub async fn test_reasoning_inference_request_json_mode_streaming_with_provider(
                "messages": [
                 {
                     "role": "user",
-                    "content": "What is 34 * 57 + 21 / 3? Answer with just the number."
+                    "content": "What is 34 * 57 + 21 / 3? Answer with just the number. Output your JSON on a single line."
                 }
             ]},
         "stream": true,
@@ -1010,7 +1010,7 @@ pub async fn test_reasoning_inference_request_json_mode_streaming_with_provider(
         "messages": [
             {
                 "role": "user",
-                "content": [{"type": "text", "text": "What is 34 * 57 + 21 / 3? Answer with just the number."}]
+                "content": [{"type": "text", "text": "What is 34 * 57 + 21 / 3? Answer with just the number. Output your JSON on a single line."}]
             }
         ]
     });
