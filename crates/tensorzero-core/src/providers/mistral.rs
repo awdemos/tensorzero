@@ -1922,7 +1922,7 @@ mod tests {
 
         let request_body = MistralRequest {
             messages: vec![],
-            model: "magistral-small-latest",
+            model: "magistral-medium-latest",
             temperature: None,
             max_tokens: Some(800),
             random_seed: None,
@@ -2130,7 +2130,7 @@ mod tests {
     fn test_mistral_request_with_prompt_mode() {
         let request = MistralRequest {
             messages: vec![],
-            model: "magistral-small-latest",
+            model: "magistral-medium-latest",
             temperature: None,
             top_p: None,
             presence_penalty: None,

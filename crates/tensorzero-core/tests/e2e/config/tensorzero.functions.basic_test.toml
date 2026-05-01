@@ -435,7 +435,7 @@ max_tokens = 100
 
 [functions.basic_test.variants.mistral-reasoning]
 type = "chat_completion"
-model = "magistral-small-latest"
+model = "magistral-medium-latest"
 system_template = "../../../fixtures/config/functions/basic_test/prompt/system_template.minijinja"
 max_tokens = 800
 
