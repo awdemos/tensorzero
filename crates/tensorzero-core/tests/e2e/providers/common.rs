@@ -12876,7 +12876,7 @@ pub async fn test_reasoning_multi_turn_thought_non_streaming_with_provider(
             "messages": [
                 {
                     "role": "user",
-                    "content": "Hi I'm visiting Brooklyn from Brazil. What's the weather?"
+                    "content": "Think before responding. Hi I'm visiting Brooklyn from Brazil. What's the weather?"
                 }
             ]},
         "extra_headers": extra_headers.extra_headers,
@@ -12924,7 +12924,7 @@ pub async fn test_reasoning_multi_turn_thought_non_streaming_with_provider(
     let mut new_messages = vec![
         serde_json::json!({
             "role": "user",
-            "content": "Hi I'm visiting Brooklyn from Brazil. What's the weather?"
+            "content": "Think before responding. Hi I'm visiting Brooklyn from Brazil. What's the weather?"
         }),
         serde_json::json!({
             "role": "assistant",
@@ -13043,7 +13043,7 @@ pub async fn test_reasoning_multi_turn_thought_streaming_with_provider(provider:
             "messages": [
                 {
                     "role": "user",
-                    "content": "Hi I'm visiting Brooklyn from Brazil. What's the weather?"
+                    "content": "Think before responding. Hi I'm visiting Brooklyn from Brazil. What's the weather?"
                 }
             ]},
         "extra_headers": extra_headers.extra_headers,
@@ -13129,7 +13129,7 @@ pub async fn test_reasoning_multi_turn_thought_streaming_with_provider(provider:
     let mut new_messages = vec![
         serde_json::json!({
             "role": "user",
-            "content": "Hi I'm visiting Brooklyn from Brazil. What's the weather?"
+            "content": "Think before responding. Hi I'm visiting Brooklyn from Brazil. What's the weather?"
         }),
         serde_json::json!({
             "role": "assistant",
