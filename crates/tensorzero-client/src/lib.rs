@@ -1488,8 +1488,7 @@ impl ClientExt for Client {
                     // `snapshot.hash` (legacy) here would 404 on CH
                     // since the CH column stores canonical bytes
                     // going forward.
-                    let canonical_hash =
-                        snapshot.config.canonical_hash().map_err(err_to_http)?;
+                    let canonical_hash = snapshot.config.canonical_hash().map_err(err_to_http)?;
                     let hash = canonical_hash.to_string();
 
                     gateway
