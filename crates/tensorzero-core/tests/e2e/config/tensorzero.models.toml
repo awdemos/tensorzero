@@ -463,7 +463,6 @@ routing = ["mistral"]
 [models."magistral-small-latest".providers.mistral]
 type = "mistral"
 model_name = "magistral-small-latest"
-prompt_mode = "reasoning"
 
 [models.o4-mini]
 routing = ["openai"]
