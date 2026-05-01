@@ -1141,7 +1141,7 @@ pub async fn test_reasoning_inference_request_json_mode_streaming_with_provider(
     let expected_input_messages = vec![StoredRequestMessage {
         role: Role::User,
         content: vec![StoredContentBlock::Text(Text {
-            text: "What is 34 * 57 + 21 / 3? Answer with just the number.".to_string(),
+            text: "What is 34 * 57 + 21 / 3? Answer with just the number. Output your JSON on a single line.".to_string(),
         })],
     }];
     assert_eq!(input_messages, expected_input_messages);
