@@ -229,7 +229,10 @@ optimize = "max"
     let snapshot1 =
         ConfigSnapshot::from_stored_config(stored_config.clone(), HashMap::new(), tags1).unwrap();
 
-    let hash = snapshot1.hash.clone();
+    // Lookup must use the canonical hash — it's what's in the
+    // CH `hash` column going forward, and what new PG rows index
+    // under `canonical_hash`.
+    let hash = snapshot1.config.canonical_hash().unwrap();
 
     conn.write_config_snapshot(&snapshot1).await.unwrap();
     conn.sleep_for_writes_to_be_visible().await;
@@ -255,7 +258,11 @@ optimize = "max"
     let snapshot2 =
         ConfigSnapshot::from_stored_config(stored_config.clone(), HashMap::new(), tags2).unwrap();
 
-    assert_eq!(snapshot2.hash, hash, "Same config should produce same hash");
+    assert_eq!(
+        snapshot2.config.canonical_hash().unwrap(),
+        hash,
+        "Same config should produce same hash"
+    );
 
     conn.write_config_snapshot(&snapshot2).await.unwrap();
     conn.sleep_for_writes_to_be_visible().await;
