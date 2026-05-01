@@ -210,6 +210,13 @@ pub async fn setup_trigram_indexes(pool: &PgPool) -> Result<(), Error> {
     Ok(())
 }
 
+fn is_undefined_table_error(err: &sqlx::Error) -> bool {
+    let Some(db_error) = err.as_database_error() else {
+        return false;
+    };
+    db_error.code().is_some_and(|code| code == "42P01")
+}
+
 /// Returns the names of all direct child partitions of `table` in the `tensorzero` schema.
 async fn get_partitions(pool: &PgPool, table: &str) -> Result<Vec<String>, Error> {
     sqlx::query_scalar(
@@ -341,11 +348,40 @@ async fn create_and_attach_partition_indexes(
         if already_indexed.contains(partition.as_str()) {
             continue;
         }
+        if !partition_exists(pool, partition).await? {
+            tracing::debug!(
+                "Skipping trigram index setup for `{partition}` because the partition no longer exists"
+            );
+            continue;
+        }
+
         create_partition_index_concurrently(pool, table, column, partition).await?;
         attach_partition_index(pool, &parent_index, partition, column).await?;
     }
 
     Ok(())
+}
+
+async fn partition_exists(pool: &PgPool, partition: &str) -> Result<bool, Error> {
+    sqlx::query_scalar(
+        r"
+        SELECT EXISTS(
+            SELECT 1
+            FROM pg_class c
+            JOIN pg_namespace ns ON c.relnamespace = ns.oid
+            WHERE ns.nspname = 'tensorzero'
+              AND c.relname = $1
+        )
+        ",
+    )
+    .bind(partition)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| {
+        Error::new(ErrorDetails::PostgresQuery {
+            message: format!("Failed to check whether partition `{partition}` exists: {e}"),
+        })
+    })
 }
 
 /// Creates a trigram index concurrently on a single partition.
@@ -362,16 +398,19 @@ async fn create_partition_index_concurrently(
         "CREATE INDEX CONCURRENTLY IF NOT EXISTS {index_name} \
          ON tensorzero.{partition} USING GIN (CAST({column} AS TEXT) gin_trgm_ops)"
     );
-    sqlx::raw_sql(AssertSqlSafe(sql))
-        .execute(pool)
-        .await
-        .map_err(|e| {
-            Error::new(ErrorDetails::PostgresQuery {
-                message: format!(
-                    "Failed to create trigram index `{index_name}` on partition `{partition}` of `{table}`: {e}"
-                ),
-            })
-        })?;
+    if let Err(e) = sqlx::raw_sql(AssertSqlSafe(sql)).execute(pool).await {
+        if is_undefined_table_error(&e) {
+            tracing::debug!(
+                "Skipping trigram index creation for `{partition}` because the partition disappeared"
+            );
+            return Ok(());
+        }
+        return Err(Error::new(ErrorDetails::PostgresQuery {
+            message: format!(
+                "Failed to create trigram index `{index_name}` on partition `{partition}` of `{table}`: {e}"
+            ),
+        }));
+    }
     Ok(())
 }
 
