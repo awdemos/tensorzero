@@ -373,6 +373,151 @@ optimize = "max"
     );
 }
 
+/// Backfill: pre-migration ClickHouse rows have `canonical_hash = 0`
+/// (the `DEFAULT` from migration 0054, since `UInt256` has no NULL).
+/// `backfill_config_snapshot_canonical_hash` finds those rows, recomputes
+/// the structural hash from the row's `config` (TOML) text, and re-INSERTs
+/// the row with the new column populated. After backfill:
+///
+/// - The legacy `hash` column is unchanged.
+/// - The `canonical_hash` column equals `StoredConfig::canonical_hash()`.
+/// - A canonical-hash lookup via `get_config_snapshot` resolves the row.
+/// - Re-running the backfill is a no-op.
+#[tokio::test(flavor = "multi_thread")]
+async fn backfill_populates_canonical_hash_for_legacy_clickhouse_rows() {
+    use tensorzero_core::db::clickhouse::ExternalDataInfo;
+    use tensorzero_core::db::clickhouse::config_queries::backfill_config_snapshot_canonical_hash;
+
+    let clickhouse = get_clickhouse().await;
+    let id = Uuid::now_v7();
+
+    // Build a snapshot. We deliberately bypass `write_config_snapshot`
+    // (which now populates both columns) and INSERT directly with
+    // `canonical_hash = 0` to simulate a row written before migration
+    // 0054 ran.
+    let config_toml = format!(
+        r#"
+[metrics.bf_metric_{id}]
+type = "boolean"
+level = "inference"
+optimize = "max"
+"#
+    );
+    let snapshot =
+        ConfigSnapshot::new_from_toml_string(&config_toml, HashMap::new()).expect("parse fixture");
+    let legacy_decimal = snapshot.hash.to_decimal_string().to_string();
+    let expected_canonical = snapshot
+        .config
+        .canonical_hash()
+        .expect("canonical_hash should succeed");
+    let expected_canonical_decimal = expected_canonical.to_decimal_string();
+
+    // Direct INSERT with canonical_hash = 0. Mirrors the row shape a
+    // pre-migration-0054 gateway would have written.
+    let raw_config = toml::to_string(&snapshot.config).unwrap();
+    let row_json = serde_json::json!({
+        "config": raw_config,
+        "extra_templates": {},
+        "hash": legacy_decimal,
+        "tensorzero_version": tensorzero_core::endpoints::status::TENSORZERO_VERSION,
+        "tags": {},
+    });
+    let external_data = ExternalDataInfo {
+        external_data_name: "new_data".to_string(),
+        structure: "config String, extra_templates Map(String, String), hash String, tensorzero_version String, tags Map(String, String)".to_string(),
+        format: "JSONEachRow".to_string(),
+        data: row_json.to_string(),
+    };
+    let insert_query = r"INSERT INTO ConfigSnapshot
+(config, extra_templates, hash, canonical_hash, tensorzero_version, tags, created_at, last_used)
+SELECT
+    new_data.config,
+    new_data.extra_templates,
+    toUInt256(new_data.hash) as hash,
+    toUInt256(0) as canonical_hash,
+    new_data.tensorzero_version,
+    new_data.tags,
+    now64() as created_at,
+    now64() as last_used
+FROM new_data"
+        .to_string();
+    clickhouse
+        .run_query_with_external_data(external_data, insert_query)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Pre-backfill sanity: the row really has canonical_hash = 0.
+    let pre_query = format!(
+        "SELECT toString(canonical_hash) AS canonical_hash FROM ConfigSnapshot FINAL \
+         WHERE hash = toUInt256('{legacy_decimal}') FORMAT JSONEachRow"
+    );
+    let pre_response = clickhouse
+        .run_query_synchronous_no_params(pre_query)
+        .await
+        .unwrap();
+    let pre_row: serde_json::Value = serde_json::from_str(&pre_response.response).unwrap();
+    assert_eq!(
+        pre_row["canonical_hash"].as_str().unwrap(),
+        "0",
+        "test setup must leave canonical_hash = 0 pre-backfill",
+    );
+
+    // Run the backfill.
+    backfill_config_snapshot_canonical_hash(&clickhouse)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Post-backfill: canonical_hash matches StoredConfig::canonical_hash().
+    let post_query = format!(
+        "SELECT toString(canonical_hash) AS canonical_hash FROM ConfigSnapshot FINAL \
+         WHERE hash = toUInt256('{legacy_decimal}') FORMAT JSONEachRow"
+    );
+    let post_response = clickhouse
+        .run_query_synchronous_no_params(post_query)
+        .await
+        .unwrap();
+    let post_row: serde_json::Value = serde_json::from_str(&post_response.response).unwrap();
+    assert_eq!(
+        post_row["canonical_hash"].as_str().unwrap(),
+        expected_canonical_decimal,
+        "backfilled canonical_hash must equal StoredConfig::canonical_hash",
+    );
+
+    // Canonical-hash lookup via the public read API now resolves.
+    let resolved = clickhouse
+        .get_config_snapshot(expected_canonical.clone())
+        .await
+        .expect("post-backfill canonical lookup should succeed");
+    assert!(
+        toml::to_string(&resolved.config)
+            .unwrap()
+            .contains(&format!("bf_metric_{id}")),
+        "resolved snapshot must round-trip the original metric",
+    );
+
+    // Idempotency: re-running backfill is a no-op (filter is `canonical_hash = 0`,
+    // so the just-backfilled row is excluded). Run it again, confirm the
+    // column value is unchanged.
+    backfill_config_snapshot_canonical_hash(&clickhouse)
+        .await
+        .unwrap();
+    let again_response = clickhouse
+        .run_query_synchronous_no_params(format!(
+            "SELECT toString(canonical_hash) AS canonical_hash FROM ConfigSnapshot FINAL \
+             WHERE hash = toUInt256('{legacy_decimal}') FORMAT JSONEachRow"
+        ))
+        .await
+        .unwrap();
+    let again_row: serde_json::Value = serde_json::from_str(&again_response.response).unwrap();
+    assert_eq!(
+        again_row["canonical_hash"].as_str().unwrap(),
+        expected_canonical_decimal,
+        "backfill must be idempotent",
+    );
+}
+
 /// Verifies Postgres-specific upsert behavior: `created_at` is preserved and
 /// `last_used` is updated when writing the same config snapshot twice.
 #[tokio::test]
@@ -1252,20 +1397,20 @@ model = "bf_{id}"
         "backfilled config_jsonb must equal serde_json::to_value(&snapshot.config)",
     );
 
-    // The version field is reachable via the same JSONB path the queries
-    // target. (Direct DB-side query rather than the helper, so this remains
-    // a tight test of the column contents.)
+    // The function shape is reachable via the same JSONB path the search
+    // queries target. (Direct DB-side query rather than the helper, so this
+    // remains a tight test of the column contents.)
     let cnt: i64 = sqlx::query_scalar(
         r"SELECT COUNT(*) FROM tensorzero.config_snapshots WHERE hash = $1 AND config_jsonb @> $2",
     )
     .bind(hash.as_bytes())
-    .bind(serde_json::json!({"functions": {format!("bf_{id}"): {"version": 2}}}))
+    .bind(serde_json::json!({"functions": {format!("bf_{id}"): {"type": "chat"}}}))
     .fetch_one(pool)
     .await
     .unwrap();
     assert_eq!(
         cnt, 1,
-        "post-backfill row must match the version-containment query"
+        "post-backfill row must match the function-shape containment query"
     );
 
     // Re-running backfill is a no-op. Run it again and ensure the value
