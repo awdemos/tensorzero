@@ -1252,20 +1252,20 @@ model = "bf_{id}"
         "backfilled config_jsonb must equal serde_json::to_value(&snapshot.config)",
     );
 
-    // The version field is reachable via the same JSONB path the queries
-    // target. (Direct DB-side query rather than the helper, so this remains
-    // a tight test of the column contents.)
+    // The function shape is reachable via the same JSONB path the search
+    // queries target. (Direct DB-side query rather than the helper, so this
+    // remains a tight test of the column contents.)
     let cnt: i64 = sqlx::query_scalar(
         r"SELECT COUNT(*) FROM tensorzero.config_snapshots WHERE hash = $1 AND config_jsonb @> $2",
     )
     .bind(hash.as_bytes())
-    .bind(serde_json::json!({"functions": {format!("bf_{id}"): {"version": 2}}}))
+    .bind(serde_json::json!({"functions": {format!("bf_{id}"): {"type": "chat"}}}))
     .fetch_one(pool)
     .await
     .unwrap();
     assert_eq!(
         cnt, 1,
-        "post-backfill row must match the version-containment query"
+        "post-backfill row must match the function-shape containment query"
     );
 
     // Re-running backfill is a no-op. Run it again and ensure the value
