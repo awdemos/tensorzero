@@ -159,6 +159,26 @@ fn empty_uninitialized() -> UninitializedConfig {
         .expect("empty toml::Table should produce an UninitializedConfig")
 }
 
+/// Lock a fixture's canonical hash to a committed expected hex value.
+///
+/// The hash is the persisted identity of every snapshot row, so any change
+/// to the canonical encoding rules in `canonical_hash.rs` MUST update these
+/// expected values explicitly — otherwise it would silently invalidate
+/// every existing `inferences.snapshot_hash` reference. If the encoding
+/// change is intentional, the test failure points at exactly which
+/// fixtures need their expected hash refreshed.
+fn assert_canonical_hash_matches(snapshot: &ConfigSnapshot, expected_hex: &str) {
+    let actual = snapshot
+        .config
+        .canonical_hash()
+        .expect("canonical_hash should succeed for fixture configs")
+        .to_hex_string();
+    assert_eq!(
+        actual, expected_hex,
+        "canonical hash drifted — update the expected hex if intentional",
+    );
+}
+
 // ─── P1/P3/P4/P5 + targeted P2 per fixture ───────────────────────────────
 
 #[gtest]
@@ -169,6 +189,10 @@ fn fixture_empty() {
     // Empty config: no functions, no models, no tools.
     expect_that!(json_path(&json, "functions"), eq(&serde_json::json!({})));
     expect_that!(json_path(&json, "models"), eq(&serde_json::json!({})));
+    assert_canonical_hash_matches(
+        &snapshot,
+        "e6db8d0020d65cb307316b2050d9b200a384bf3197e27e8a2d2c35b5d40c6549",
+    );
 }
 
 #[gtest]
@@ -181,6 +205,10 @@ fn fixture_chat_function_unversioned() {
     expect_that!(
         json_path(&json, "functions/my_chat_fn/type"),
         eq(&serde_json::json!("chat")),
+    );
+    assert_canonical_hash_matches(
+        &snapshot,
+        "3853aeb9ecc4243a260e55a758e3ca0c5b3fb781e8adb57ee496ec7f8de06b30",
     );
 }
 
@@ -202,6 +230,10 @@ fn fixture_multi_variant_types() {
         json_path(&json, "functions/varied/variants/mix/type"),
         eq(&serde_json::json!("experimental_mixture_of_n")),
     );
+    assert_canonical_hash_matches(
+        &snapshot,
+        "4efc9a68758a0c7553bb3996235d97774f281fd2fe2f30781f7ce4235408dbba",
+    );
 }
 
 #[gtest]
@@ -219,6 +251,10 @@ fn fixture_models_multi_provider() {
         json_path(&json, "models/anthropic_model/routing"),
         eq(&serde_json::json!(["anthropic"])),
     );
+    assert_canonical_hash_matches(
+        &snapshot,
+        "49702ca05bc6c65e8c47213463b9be9ebd63ace906c97803c258800951e361c0",
+    );
 }
 
 #[gtest]
@@ -234,6 +270,10 @@ fn fixture_tools_and_metrics() {
     expect_that!(
         json_path(&json, "metrics/correctness/type"),
         eq(&serde_json::json!("boolean")),
+    );
+    assert_canonical_hash_matches(
+        &snapshot,
+        "bec3c153277bcac47add801a8ec15be880f997ad150af8e634e2b181d1fe9d9f",
     );
 }
 
@@ -253,6 +293,10 @@ fn fixture_kitchen_sink() {
     expect_that!(
         json_path(&json, "tools/echo/description"),
         eq(&serde_json::json!("Echo the input")),
+    );
+    assert_canonical_hash_matches(
+        &snapshot,
+        "0b1b1187fbb277bc9b1521db0712053adec175b5660b5aa57d8616d2953bd235",
     );
 }
 

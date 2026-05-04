@@ -48,6 +48,18 @@ const TAG_STRING: u8 = 0x03;
 const TAG_ARRAY: u8 = 0x04;
 const TAG_OBJECT: u8 = 0x05;
 
+// Sub-tags inside `TAG_NUMBER`. JSON's `Number` is "i64-or-u64-or-f64-or-
+// arbitrary-precision-string" depending on how it was constructed; we encode
+// each kind separately so that values that would silently collapse under
+// `as_f64()` (any `u64` above 2^53) still hash distinctly. Two numbers with
+// the same logical value but different sub-tags hash differently — that's
+// fine: a `u64` field and an `f64` field are *different types* in
+// `StoredConfig`, so distinguishing them is a feature, not a bug.
+const NUMBER_KIND_INT: u8 = 0x00;
+const NUMBER_KIND_UINT: u8 = 0x01;
+const NUMBER_KIND_FLOAT: u8 = 0x02;
+const NUMBER_KIND_STRING: u8 = 0x03;
+
 impl StoredConfig {
     /// Compute a content-stable hash of this config.
     ///
@@ -115,18 +127,32 @@ fn hash_value_into(hasher: &mut Hasher, value: &Value) {
         }
         Value::Number(n) => {
             hasher.update(&[TAG_NUMBER]);
-            // Normalize to IEEE 754 f64 bit pattern. JSON's number type is
-            // f64-or-arbitrary-precision; serde_json's `Number::as_f64`
-            // returns `None` only for arbitrary-precision numbers (the
-            // crate's `arbitrary_precision` feature). For our snapshot
-            // shapes — all numeric fields are `i32`/`u32`/`u64`/`f32`/`f64`
-            // typed Rust primitives — `as_f64` is always `Some`. The string
-            // fallback exists for forward-compatibility if we ever enable
-            // arbitrary precision.
-            if let Some(f) = n.as_f64() {
+            // Encode integers exactly. `Number::as_f64()` would lose precision
+            // for any `u64` above 2^53 — two distinct `u64` values like
+            // `9_007_199_254_740_993` and `9_007_199_254_740_994` collapse to
+            // the same `f64`, which would make their canonical hashes
+            // collide. `StoredConfig` already has `u64` fields (timeouts,
+            // capacities), so this isn't theoretical. Try `as_i64` first,
+            // fall back to `as_u64` for the upper half of the unsigned
+            // range, only then to `as_f64` for fractional numbers.
+            //
+            // Each integer kind carries its own sub-tag so an `i64`-shaped
+            // value and a `u64`-shaped value with bit-equal magnitudes
+            // can't collide either. The `as_string` fallback exists for
+            // serde_json's `arbitrary_precision` feature; we don't enable
+            // it but the encoding stays well-defined if someone does.
+            if let Some(i) = n.as_i64() {
+                hasher.update(&[NUMBER_KIND_INT]);
+                hasher.update(&i.to_be_bytes());
+            } else if let Some(u) = n.as_u64() {
+                hasher.update(&[NUMBER_KIND_UINT]);
+                hasher.update(&u.to_be_bytes());
+            } else if let Some(f) = n.as_f64() {
+                hasher.update(&[NUMBER_KIND_FLOAT]);
                 hasher.update(&f.to_be_bytes());
             } else {
                 let s = n.to_string();
+                hasher.update(&[NUMBER_KIND_STRING]);
                 hasher.update(&len_u64(s.len()).to_be_bytes());
                 hasher.update(s.as_bytes());
             }
@@ -306,6 +332,49 @@ temperature = 0.7
         assert_ne!(
             canonical_hash_value(&one).as_bytes(),
             canonical_hash_value(&two).as_bytes(),
+        );
+    }
+
+    #[test]
+    fn large_u64_values_do_not_collide_via_f64_truncation() {
+        // Regression for the as_f64()-only encoding: every u64 above 2^53
+        // shares its f64 representation with at least one neighbor, so
+        // hashing through `as_f64()` made distinct logical configs alias.
+        // The integer-aware encoding distinguishes them.
+        use serde_json::{Number, Value};
+
+        // f64 mantissa is 52 bits + implicit 1 ⇒ 53 bits of precision, so
+        // integers up to 2^53 are exact and `2^53 + 1` rounds (banker's) to
+        // `2^53`. The two distinct `u64` values share an `f64`.
+        let a = 9_007_199_254_740_992u64; // 2^53 (exact)
+        let b = 9_007_199_254_740_993u64; // 2^53 + 1 (rounds to 2^53)
+        assert_eq!(a as f64, b as f64, "preconditions: f64 collapses these");
+
+        let h_a = canonical_hash_value(&Value::Number(Number::from(a)));
+        let h_b = canonical_hash_value(&Value::Number(Number::from(b)));
+        assert_ne!(
+            h_a.as_bytes(),
+            h_b.as_bytes(),
+            "canonical hash must distinguish u64 values that share an f64",
+        );
+    }
+
+    #[test]
+    fn integer_and_float_with_same_magnitude_hash_differently() {
+        // A `u32 = 1` field and an `f64 = 1.0` field are different types
+        // in `StoredConfig`; `serde_json::Value` carries the distinction
+        // via `Number::as_i64` vs `as_f64`. The canonical encoding uses
+        // separate sub-tags so they don't collide.
+        use serde_json::{Number, Value};
+
+        let int_one = canonical_hash_value(&Value::Number(Number::from(1u64)));
+        let float_one = canonical_hash_value(&Value::Number(
+            Number::from_f64(1.0).expect("1.0 is finite"),
+        ));
+        assert_ne!(
+            int_one.as_bytes(),
+            float_one.as_bytes(),
+            "integer 1 and float 1.0 must not share a canonical hash",
         );
     }
 

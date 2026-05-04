@@ -725,7 +725,7 @@ impl WorkflowEvaluationQueries for ClickHouseConnectionInfo {
         params.insert("run_display_name", run_display_name.unwrap_or("\\N"));
         // ClickHouse `toUInt256OrNull` expects a raw decimal — no scheme
         // prefix. Use `to_decimal_string` rather than the `Display` impl
-        // (which now emits `vN:DECIMAL`).
+        // (which prefixes canonical hashes with `can:`).
         params.insert("snapshot_hash", snapshot_hash.to_decimal_string());
 
         self.run_query_synchronous(query.to_string(), &params)
@@ -774,7 +774,7 @@ impl WorkflowEvaluationQueries for ClickHouseConnectionInfo {
         params.insert("tags", tags_str.as_str());
         // ClickHouse `toUInt256OrNull` expects a raw decimal — no scheme
         // prefix. Use `to_decimal_string` rather than the `Display` impl
-        // (which now emits `vN:DECIMAL`).
+        // (which prefixes canonical hashes with `can:`).
         params.insert("snapshot_hash", snapshot_hash.to_decimal_string());
 
         self.run_query_synchronous(query.to_string(), &params)
