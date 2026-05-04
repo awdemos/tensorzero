@@ -18,12 +18,14 @@ use std::sync::Arc;
 pub enum SnapshotHashScheme {
     /// V1: blake3 over canonical-TOML bytes. The hash basis on `main` and
     /// what `inferences.snapshot_hash` references for every row written
-    /// before the canonical-hash migration. Display prefix: `v1:`.
+    /// before the canonical-hash migration. Display: bare decimal, no
+    /// scheme prefix — exactly the wire form pre-migration callers
+    /// used, so existing tags/rows/URLs parse unchanged.
     LegacyToml,
     /// V2: structural blake3 over the canonical JSON Value form. Stable
     /// across serialization roundtrips (see
     /// `tensorzero_core::config::snapshot::canonical_hash`). Display
-    /// prefix: `v2:`.
+    /// prefix: `can:`.
     Canonical,
 }
 
@@ -38,20 +40,11 @@ impl SnapshotHashScheme {
     ///   etc. parse unchanged.
     ///
     /// `prefix()` returns `None` for legacy because the legacy form has
-    /// no prefix on the wire. Callers that want a stable label for
-    /// logging or matching can use `name()` instead.
+    /// no prefix on the wire.
     pub const fn prefix(self) -> Option<&'static str> {
         match self {
             SnapshotHashScheme::LegacyToml => None,
             SnapshotHashScheme::Canonical => Some("can"),
-        }
-    }
-
-    /// Human-readable scheme name for log/error messages. Stable.
-    pub const fn name(self) -> &'static str {
-        match self {
-            SnapshotHashScheme::LegacyToml => "legacy",
-            SnapshotHashScheme::Canonical => "canonical",
         }
     }
 }
@@ -62,21 +55,50 @@ impl SnapshotHashScheme {
 /// As of the canonical-hash migration, every `SnapshotHash` also carries
 /// a `SnapshotHashScheme` describing which hash function produced its
 /// bytes. The `Display`, `FromStr`, and `Serialize`/`Deserialize` impls
-/// use the prefixed form (`v1:` / `v2:`) so callers can route lookups
-/// to the right column without out-of-band scheme information.
+/// use the self-describing wire form (bare decimal for legacy, `can:`
+/// for canonical) so callers can route lookups to the right column
+/// without out-of-band scheme information.
 ///
 /// Backwards compatibility: `FromStr` (and therefore `Deserialize`)
 /// accepts the legacy unprefixed decimal form and defaults it to
 /// `LegacyToml`. This keeps every pre-migration `inferences.snapshot_hash`
 /// value parseable without a backfill.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+///
+/// Identity is `(scheme, bytes)` only — `decimal_str` is a derived
+/// cache of `bytes` and `PartialEq` / `Hash` skip it. Two `SnapshotHash`
+/// values with the same scheme and bytes always compare equal even if
+/// the cached decimal string was constructed via different paths.
+#[derive(Clone, Debug)]
 pub struct SnapshotHash {
     scheme: SnapshotHashScheme,
-    /// The decimal string representation of the hash (used for ClickHouse)
+    /// The decimal string representation of the hash (used for ClickHouse).
+    /// Derived from `bytes`; not part of the value's identity.
     decimal_str: Arc<str>,
-    /// The big-endian bytes representation of the hash (used for Postgres BYTEA)
+    /// The big-endian bytes representation of the hash (used for Postgres BYTEA).
     /// This is 256 bits (32 bytes).
     bytes: Arc<[u8]>,
+}
+
+impl PartialEq for SnapshotHash {
+    fn eq(&self, other: &Self) -> bool {
+        // `decimal_str` is derived from `bytes`, so comparing it would be
+        // redundant and would couple equality to a happens-to-be-cached
+        // representation rather than the underlying value.
+        self.scheme == other.scheme && self.bytes == other.bytes
+    }
+}
+
+impl Eq for SnapshotHash {}
+
+impl std::hash::Hash for SnapshotHash {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Mirror `PartialEq`: hash only the identity-bearing fields.
+        // Skipping `decimal_str` avoids ~78 bytes of redundant work and
+        // upholds the `k1 == k2 ⇒ hash(k1) == hash(k2)` invariant under
+        // the trimmed `eq`.
+        self.scheme.hash(state);
+        self.bytes.hash(state);
+    }
 }
 
 impl SnapshotHash {
@@ -93,7 +115,7 @@ impl SnapshotHash {
         Self::from_biguint_with_scheme(big_int, SnapshotHashScheme::Canonical)
     }
 
-    fn from_biguint_with_scheme(big_int: BigUint, scheme: SnapshotHashScheme) -> Self {
+    pub(crate) fn from_biguint_with_scheme(big_int: BigUint, scheme: SnapshotHashScheme) -> Self {
         let decimal_str = Arc::from(big_int.to_string());
         let bytes = Arc::from(big_int.to_bytes_be());
         Self {
@@ -118,7 +140,7 @@ impl SnapshotHash {
         Self::from_bytes_with_scheme(bytes, SnapshotHashScheme::Canonical)
     }
 
-    fn from_bytes_with_scheme(bytes: &[u8], scheme: SnapshotHashScheme) -> Self {
+    pub(crate) fn from_bytes_with_scheme(bytes: &[u8], scheme: SnapshotHashScheme) -> Self {
         let big_int = BigUint::from_bytes_be(bytes);
         Self::from_biguint_with_scheme(big_int, scheme)
     }
@@ -141,7 +163,7 @@ impl SnapshotHash {
     /// the raw byte form intended for DB hex encodings, not for
     /// self-describing identifiers in transport.
     pub fn to_hex_string(&self) -> String {
-        hex::encode(&*self.bytes)
+        hex::encode(self.as_bytes())
     }
 
     /// Returns the decimal string form WITHOUT the scheme prefix.
@@ -180,30 +202,39 @@ impl Serialize for SnapshotHash {
     }
 }
 
-/// Custom serializer for `Option<SnapshotHash>` fields that go directly
-/// into numeric DB columns (`UInt256`, `NUMERIC(78,0)`). Emits the bare
-/// decimal — the prefix would fail the column's numeric parser.
-///
-/// Use as `#[serde(serialize_with = "tensorzero_types::snapshot::serialize_optional_hash_bare_decimal")]`.
-pub fn serialize_optional_hash_bare_decimal<S>(
-    hash: &Option<SnapshotHash>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    match hash {
-        Some(h) => serializer.serialize_str(h.to_decimal_string()),
-        None => serializer.serialize_none(),
-    }
-}
+/// `#[serde(serialize_with = ...)]` opt-outs for `SnapshotHash` fields
+/// whose backing storage cannot accept the scheme prefix (ClickHouse
+/// `UInt256`, Postgres `NUMERIC(78,0)`). Both helpers emit the bare
+/// decimal form regardless of scheme.
+pub mod serializers {
+    use super::SnapshotHash;
+    use serde::Serializer;
 
-/// Like `serialize_optional_hash_bare_decimal` but for non-`Option` fields.
-pub fn serialize_hash_bare_decimal<S>(hash: &SnapshotHash, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    serializer.serialize_str(hash.to_decimal_string())
+    /// For `Option<SnapshotHash>` fields. Emits `null` for `None`, bare
+    /// decimal for `Some`. Use as
+    /// `#[serde(serialize_with = "tensorzero_types::snapshot::serializers::optional_bare_decimal")]`.
+    pub fn optional_bare_decimal<S>(
+        hash: &Option<SnapshotHash>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match hash {
+            Some(h) => serializer.serialize_str(h.to_decimal_string()),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    /// For non-`Option` `SnapshotHash` fields. Emits the bare decimal.
+    /// Use as
+    /// `#[serde(serialize_with = "tensorzero_types::snapshot::serializers::bare_decimal")]`.
+    pub fn bare_decimal<S>(hash: &SnapshotHash, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(hash.to_decimal_string())
+    }
 }
 
 impl std::str::FromStr for SnapshotHash {
@@ -236,8 +267,28 @@ impl<'de> Deserialize<'de> for SnapshotHash {
     where
         D: serde::Deserializer<'de>,
     {
-        let s = String::deserialize(deserializer)?;
-        s.parse::<SnapshotHash>().map_err(serde::de::Error::custom)
+        // Use a visitor over `&str` so borrowed deserializers (serde_json,
+        // sqlx) don't pay for an intermediate `String` allocation per
+        // row. `visit_string` is provided as a fallback for owning
+        // deserializers that cannot hand out a borrow.
+        struct V;
+        impl serde::de::Visitor<'_> for V {
+            type Value = SnapshotHash;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a SnapshotHash decimal string (optionally `can:`-prefixed)")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, s: &str) -> Result<SnapshotHash, E> {
+                s.parse::<SnapshotHash>().map_err(E::custom)
+            }
+
+            fn visit_string<E: serde::de::Error>(self, s: String) -> Result<SnapshotHash, E> {
+                self.visit_str(&s)
+            }
+        }
+
+        deserializer.deserialize_str(V)
     }
 }
 
@@ -393,11 +444,11 @@ mod tests {
     fn bare_decimal_helper_strips_prefix() {
         // The DB-row helper opt-out: numeric columns can't accept the
         // `can:` prefix, so DB-row structs annotated with
-        // `serialize_with = "serialize_optional_hash_bare_decimal"`
-        // emit just the digits.
+        // `serialize_with = "serializers::optional_bare_decimal"` emit
+        // just the digits.
         #[derive(Serialize)]
         struct Row {
-            #[serde(serialize_with = "serialize_optional_hash_bare_decimal")]
+            #[serde(serialize_with = "serializers::optional_bare_decimal")]
             snapshot_hash: Option<SnapshotHash>,
         }
         let canonical = SnapshotHash::from_canonical_bytes(&[0x99; 32]);
@@ -418,6 +469,33 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&none_row).unwrap(),
             r#"{"snapshot_hash":null}"#
+        );
+    }
+
+    #[test]
+    fn eq_and_hash_skip_cached_decimal_string() {
+        // Locks in the documented identity contract: `decimal_str` is a
+        // derived cache of `bytes`, so two `SnapshotHash` values with
+        // the same `(scheme, bytes)` must compare equal and hash equal,
+        // independent of how their decimal cache was constructed.
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let bytes = [0x33; 32];
+        let from_bytes = SnapshotHash::from_canonical_bytes(&bytes);
+        let from_biguint = SnapshotHash::from_biguint_canonical(BigUint::from_bytes_be(&bytes));
+
+        // Sanity: same value, two construction paths.
+        assert_eq!(from_bytes, from_biguint);
+
+        let mut h1 = DefaultHasher::new();
+        from_bytes.hash(&mut h1);
+        let mut h2 = DefaultHasher::new();
+        from_biguint.hash(&mut h2);
+        assert_eq!(
+            h1.finish(),
+            h2.finish(),
+            "Hash must depend only on (scheme, bytes), matching PartialEq",
         );
     }
 

@@ -89,6 +89,21 @@ pub(crate) fn canonical_hash_value(value: &Value) -> SnapshotHash {
     SnapshotHash::from_biguint_canonical(BigUint::from_bytes_be(hash.as_bytes()))
 }
 
+/// Cast a `usize` length into the `u64` length-prefix slot used by the
+/// canonical encoding. The canonical hash bytes are the persisted
+/// identity of every config snapshot, so a silently-truncating `as u64`
+/// would be unrecoverable on a future >64-bit platform. We make the
+/// assumption explicit by panicking instead — the gateway is built
+/// only for 64-bit and 32-bit targets, where `usize ≤ u64` holds and
+/// this branch is statically unreachable.
+#[expect(
+    clippy::expect_used,
+    reason = "usize > u64 is impossible on every platform we ship; making the assumption explicit beats a silent truncating cast"
+)]
+fn len_u64(n: usize) -> u64 {
+    u64::try_from(n).expect("usize fits in u64 on supported platforms")
+}
+
 fn hash_value_into(hasher: &mut Hasher, value: &Value) {
     match value {
         Value::Null => {
@@ -112,31 +127,33 @@ fn hash_value_into(hasher: &mut Hasher, value: &Value) {
                 hasher.update(&f.to_be_bytes());
             } else {
                 let s = n.to_string();
-                hasher.update(&(s.len() as u64).to_be_bytes());
+                hasher.update(&len_u64(s.len()).to_be_bytes());
                 hasher.update(s.as_bytes());
             }
         }
         Value::String(s) => {
             hasher.update(&[TAG_STRING]);
-            hasher.update(&(s.len() as u64).to_be_bytes());
+            hasher.update(&len_u64(s.len()).to_be_bytes());
             hasher.update(s.as_bytes());
         }
         Value::Array(arr) => {
             hasher.update(&[TAG_ARRAY]);
-            hasher.update(&(arr.len() as u64).to_be_bytes());
+            hasher.update(&len_u64(arr.len()).to_be_bytes());
             for item in arr {
                 hash_value_into(hasher, item);
             }
         }
         Value::Object(map) => {
             hasher.update(&[TAG_OBJECT]);
-            hasher.update(&(map.len() as u64).to_be_bytes());
+            hasher.update(&len_u64(map.len()).to_be_bytes());
             // Sort entries by key for deterministic ordering — JSON
             // objects are unordered, so the canonical encoding must be too.
+            // `sort_unstable_by_key` is fine: `serde_json::Map` keys are
+            // unique, so stability doesn't change the result.
             let mut entries: Vec<(&String, &Value)> = map.iter().collect();
-            entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+            entries.sort_unstable_by_key(|(k, _)| *k);
             for (k, v) in entries {
-                hasher.update(&(k.len() as u64).to_be_bytes());
+                hasher.update(&len_u64(k.len()).to_be_bytes());
                 hasher.update(k.as_bytes());
                 hash_value_into(hasher, v);
             }
