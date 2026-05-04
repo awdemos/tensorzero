@@ -457,12 +457,12 @@ type = "mistral"
 model_name = "open-mistral-nemo-2407"
 api_key_location = "dynamic::mistral_api_key"
 
-[models."magistral-large-latest"]
+[models."mistral-large-latest"]
 routing = ["mistral"]
 
-[models."magistral-large-latest".providers.mistral]
+[models."mistral-large-latest".providers.mistral]
 type = "mistral"
-model_name = "magistral-large-latest"
+model_name = "mistral-large-latest"
 prompt_mode = "reasoning"
 
 [models.o4-mini]

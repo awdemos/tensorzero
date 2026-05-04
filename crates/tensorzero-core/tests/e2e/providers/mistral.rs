@@ -95,7 +95,7 @@ async fn get_providers() -> E2ETestProviders {
     let reasoning_providers = vec![E2ETestProvider {
         supports_batch_inference: false,
         variant_name: "mistral-reasoning".to_string(),
-        model_name: "magistral-large-latest".into(),
+        model_name: "mistral-large-latest".into(),
         model_provider_name: "mistral".into(),
         credentials: HashMap::new(),
     }];
