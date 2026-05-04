@@ -880,7 +880,10 @@ async fn config_jsonb_column_is_populated_on_write_postgres() {
     let postgres = get_test_postgres().await;
     let random_id = Uuid::now_v7();
 
-    // Versioned function and variant — must round-trip into JSONB.
+    // Function-level discriminator we can later search for via JSONB
+    // containment. (We use `description` rather than the planned
+    // `version` field because the latter doesn't exist on
+    // `UninitializedFunctionConfig` until the per-object metadata PR.)
     let config_toml = format!(
         r#"
 [models.dummy_{random_id}]
@@ -892,12 +895,11 @@ model_name = "test"
 
 [functions.f_{random_id}]
 type = "chat"
-version = 4
+description = "v4"
 
 [functions.f_{random_id}.variants.v1]
 type = "chat_completion"
 model = "dummy_{random_id}"
-version = 9
 "#
     );
 
@@ -923,32 +925,29 @@ version = 9
         "config_jsonb column must equal serde_json::to_value(&snapshot.config)",
     );
 
-    // The version fields landed at the expected paths — same paths the GIN
-    // queries target.
+    // The discriminator field landed at the expected path — same shape
+    // the GIN queries target.
     assert_eq!(
         stored_json
-            .pointer(&format!("/functions/f_{random_id}/version"))
-            .and_then(|v| v.as_u64()),
-        Some(4),
-    );
-    assert_eq!(
-        stored_json
-            .pointer(&format!("/functions/f_{random_id}/variants/v1/version"))
-            .and_then(|v| v.as_u64()),
-        Some(9),
+            .pointer(&format!("/functions/f_{random_id}/description"))
+            .and_then(|v| v.as_str()),
+        Some("v4"),
     );
 }
 
 #[tokio::test]
 #[expect(clippy::disallowed_methods)]
-async fn snapshots_with_path_value_finds_matching_function_version() {
+async fn snapshots_with_path_value_finds_matching_function_description() {
     let postgres = get_test_postgres().await;
     let target_id = Uuid::now_v7();
 
-    // Three snapshots: two with the SAME function name but different
-    // versions, one with a different function name. Only the rows whose
-    // version matches the query should come back.
-    for (function_version, marker) in [(7, "alpha"), (7, "beta"), (8, "gamma")] {
+    // Three snapshots: two with the SAME function name carrying
+    // `description = "v7"`, one with `description = "v8"`. A decoy uses
+    // a different function name. Only the rows whose description
+    // matches the query should come back. (Using `description` rather
+    // than the planned `version` field — the latter doesn't exist on
+    // `UninitializedFunctionConfig` until per-object metadata lands.)
+    for (description, marker) in [("v7", "alpha"), ("v7", "beta"), ("v8", "gamma")] {
         let config_toml = format!(
             r#"
 [models.dummy_{target_id}_{marker}]
@@ -960,7 +959,7 @@ model_name = "test"
 
 [functions.target_{target_id}]
 type = "chat"
-version = {function_version}
+description = "{description}"
 
 [functions.target_{target_id}.variants.{marker}]
 type = "chat_completion"
@@ -971,7 +970,9 @@ model = "dummy_{target_id}_{marker}"
             .expect("fixture parse");
         postgres.write_config_snapshot(&snap).await.unwrap();
     }
-    // Decoy: same function name doesn't appear, so this row must not match.
+    // Decoy: same description value but on a DIFFERENT function name —
+    // must not match the target-name query because the JSONPath nests
+    // the function name above the description.
     let decoy = format!(
         r#"
 [models.decoy_{target_id}]
@@ -983,7 +984,7 @@ model_name = "test"
 
 [functions.unrelated_{target_id}]
 type = "chat"
-version = 7
+description = "v7"
 
 [functions.unrelated_{target_id}.variants.only]
 type = "chat_completion"
@@ -994,40 +995,40 @@ model = "decoy_{target_id}"
         ConfigSnapshot::new_from_toml_string(&decoy, HashMap::new()).expect("decoy parse");
     postgres.write_config_snapshot(&decoy_snap).await.unwrap();
 
-    // Query for function_version = 7 on the target function name.
+    // Query for description = "v7" on the target function name.
     let hits = postgres
         .snapshots_with_path_value(
-            &format!("functions/target_{target_id}/version"),
-            &serde_json::json!(7),
+            &format!("functions/target_{target_id}/description"),
+            &serde_json::json!("v7"),
         )
         .await
         .unwrap();
     assert_eq!(
         hits.len(),
         2,
-        "expected 2 snapshots with target function at version 7, got {}",
+        "expected 2 snapshots with target function description=v7, got {}",
         hits.len(),
     );
 
-    // Query for function_version = 8 — only one match.
+    // Query for description = "v8" — only one match.
     let hits_v8 = postgres
         .snapshots_with_path_value(
-            &format!("functions/target_{target_id}/version"),
-            &serde_json::json!(8),
+            &format!("functions/target_{target_id}/description"),
+            &serde_json::json!("v8"),
         )
         .await
         .unwrap();
-    assert_eq!(hits_v8.len(), 1, "expected 1 snapshot at version 8");
+    assert_eq!(hits_v8.len(), 1, "expected 1 snapshot at description=v8");
 
-    // Query for a non-existent version — zero matches.
-    let hits_v999 = postgres
+    // Query for a non-existent description — zero matches.
+    let hits_missing = postgres
         .snapshots_with_path_value(
-            &format!("functions/target_{target_id}/version"),
-            &serde_json::json!(999),
+            &format!("functions/target_{target_id}/description"),
+            &serde_json::json!("v999"),
         )
         .await
         .unwrap();
-    assert_eq!(hits_v999.len(), 0, "expected no matches for version 999");
+    assert_eq!(hits_missing.len(), 0, "expected no matches for v999");
 }
 
 #[tokio::test]
@@ -1036,7 +1037,11 @@ async fn snapshots_containing_finds_variant_version_via_explicit_fragment() {
     let postgres = get_test_postgres().await;
     let id = Uuid::now_v7();
 
-    // Two variants: `a` at version 3, `b` at version 5.
+    // Two variants with different `temperature` values used as the
+    // discriminator. (Using `temperature` rather than `version` since
+    // the latter doesn't exist on `UninitializedVariantConfig` until
+    // per-object metadata lands; `temperature` round-trips into JSONB
+    // as a number, so containment queries work the same way.)
     let config_toml = format!(
         r#"
 [models.m_{id}]
@@ -1052,49 +1057,56 @@ type = "chat"
 [functions.fn_{id}.variants.a]
 type = "chat_completion"
 model = "m_{id}"
-version = 3
+temperature = 0.3
 
 [functions.fn_{id}.variants.b]
 type = "chat_completion"
 model = "m_{id}"
-version = 5
+temperature = 0.5
 "#
     );
     let snap = ConfigSnapshot::new_from_toml_string(&config_toml, HashMap::new()).unwrap();
     postgres.write_config_snapshot(&snap).await.unwrap();
 
-    // Use `snapshots_containing` with an explicit nested fragment — this
-    // is the equivalent of the previous specialized `find_snapshots_with_variant_version` helper.
-    let hits_a3 = postgres
+    // Use `snapshots_containing` with an explicit nested fragment.
+    let hits_a03 = postgres
         .snapshots_containing(serde_json::json!({
-            "functions": {format!("fn_{id}"): {"variants": {"a": {"version": 3}}}}
-        }))
-        .await
-        .unwrap();
-    assert_eq!(hits_a3.len(), 1, "variant a at version 3 should match");
-    assert_eq!(hits_a3[0].as_bytes(), snap.hash.as_bytes());
-
-    let hits_a5 = postgres
-        .snapshots_containing(serde_json::json!({
-            "functions": {format!("fn_{id}"): {"variants": {"a": {"version": 5}}}}
+            "functions": {format!("fn_{id}"): {"variants": {"a": {"temperature": 0.3}}}}
         }))
         .await
         .unwrap();
     assert_eq!(
-        hits_a5.len(),
+        hits_a03.len(),
+        1,
+        "variant a at temperature 0.3 should match"
+    );
+    assert_eq!(hits_a03[0].as_bytes(), snap.hash.as_bytes());
+
+    let hits_a05 = postgres
+        .snapshots_containing(serde_json::json!({
+            "functions": {format!("fn_{id}"): {"variants": {"a": {"temperature": 0.5}}}}
+        }))
+        .await
+        .unwrap();
+    assert_eq!(
+        hits_a05.len(),
         0,
-        "variant a is at version 3, not 5; should not match",
+        "variant a is at temperature 0.3, not 0.5; should not match",
     );
 
     // Equivalent via the path-value convenience.
-    let hits_b5 = postgres
+    let hits_b05 = postgres
         .snapshots_with_path_value(
-            &format!("functions/fn_{id}/variants/b/version"),
-            &serde_json::json!(5),
+            &format!("functions/fn_{id}/variants/b/temperature"),
+            &serde_json::json!(0.5),
         )
         .await
         .unwrap();
-    assert_eq!(hits_b5.len(), 1, "variant b at version 5 should match");
+    assert_eq!(
+        hits_b05.len(),
+        1,
+        "variant b at temperature 0.5 should match"
+    );
 }
 
 #[tokio::test]
@@ -1153,7 +1165,6 @@ model_name = "test"
 
 [functions.f_{id}]
 type = "chat"
-version = 5
 
 [functions.f_{id}.variants.only]
 type = "chat_completion"
@@ -1201,7 +1212,6 @@ model_name = "test"
 
 [functions.bf_{id}]
 type = "chat"
-version = 2
 
 [functions.bf_{id}.variants.only]
 type = "chat_completion"
@@ -1296,7 +1306,6 @@ model_name = "test"
 
 [functions.j_fn_{id}]
 type = "chat"
-version = 1
 
 [functions.j_fn_{id}.variants.only]
 type = "chat_completion"
@@ -1355,7 +1364,6 @@ model_name = "test"
 
 [functions.f_{id}]
 type = "chat"
-version = 5
 
 [functions.f_{id}.variants.v]
 type = "chat_completion"
