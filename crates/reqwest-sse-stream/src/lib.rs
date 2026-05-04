@@ -12,13 +12,13 @@ pub type EventStream =
 
 #[derive(Debug, Error)]
 pub enum ReqwestSseStreamError {
-    #[error("Reqwest error: {0}")]
+    #[error("Reqwest error: {0:?}")]
     ReqwestError(reqwest::Error),
     #[error("Invalid status code: {0}")]
     InvalidStatusCode(reqwest::StatusCode, reqwest::Response),
     #[error("Expected content-type 'text/event-stream', got {0:?}")]
     InvalidContentType(http::header::HeaderValue, reqwest::Response),
-    #[error("SSE error: {0}")]
+    #[error("SSE error: {0:?}")]
     SseError(sse_stream::Error),
 }
 
