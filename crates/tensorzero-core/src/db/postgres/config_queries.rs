@@ -309,9 +309,11 @@ pub async fn backfill_config_snapshot_jsonb(pool: &PgPool) -> Result<(), Error> 
             let stored: StoredConfig = match toml::from_str(&config_toml) {
                 Ok(v) => v,
                 Err(e) => {
-                    tracing::warn!(
+                    tracing::error!(
                         hash = %hex::encode(&hash),
-                        "config_snapshots backfill: skipping unparseable TOML: {e}"
+                        "config_snapshots backfill: skipping unparseable TOML \
+                         (file a bug if you don't expect this — backfill is best-effort, \
+                         the row stays readable via legacy hash lookup): {e}"
                     );
                     total_skipped += 1;
                     continue;
@@ -320,9 +322,10 @@ pub async fn backfill_config_snapshot_jsonb(pool: &PgPool) -> Result<(), Error> 
             let config_jsonb_value = match serde_json::to_value(&stored) {
                 Ok(v) => v,
                 Err(e) => {
-                    tracing::warn!(
+                    tracing::error!(
                         hash = %hex::encode(&hash),
-                        "config_snapshots backfill: skipping un-serializable config: {e}"
+                        "config_snapshots backfill: skipping un-serializable config \
+                         (StoredConfig should always serialize to JSON — please file a bug): {e}"
                     );
                     total_skipped += 1;
                     continue;
@@ -331,9 +334,11 @@ pub async fn backfill_config_snapshot_jsonb(pool: &PgPool) -> Result<(), Error> 
             let canonical_hash = match stored.canonical_hash() {
                 Ok(h) => h,
                 Err(e) => {
-                    tracing::warn!(
+                    tracing::error!(
                         hash = %hex::encode(&hash),
-                        "config_snapshots backfill: skipping (canonical_hash failed): {e}"
+                        "config_snapshots backfill: skipping (canonical_hash computation failed \
+                         — the algorithm should be infallible for any valid StoredConfig; \
+                         please file a bug): {e}"
                     );
                     total_skipped += 1;
                     continue;
