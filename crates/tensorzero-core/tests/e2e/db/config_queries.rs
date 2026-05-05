@@ -469,9 +469,10 @@ FROM new_data"
         .unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Post-backfill: canonical_hash matches StoredConfig::canonical_hash().
+    // Post-backfill: BOTH `canonical_hash` and `config_json` are populated.
     let post_query = format!(
-        "SELECT toString(canonical_hash) AS canonical_hash FROM ConfigSnapshot FINAL \
+        "SELECT toString(canonical_hash) AS canonical_hash, config_json \
+         FROM ConfigSnapshot FINAL \
          WHERE hash = toUInt256('{legacy_decimal}') FORMAT JSONEachRow"
     );
     let post_response = clickhouse
@@ -483,6 +484,14 @@ FROM new_data"
         post_row["canonical_hash"].as_str().unwrap(),
         expected_canonical_decimal,
         "backfilled canonical_hash must equal StoredConfig::canonical_hash",
+    );
+    let stored_json: serde_json::Value =
+        serde_json::from_str(post_row["config_json"].as_str().unwrap())
+            .expect("config_json must parse as JSON");
+    let expected_json = serde_json::to_value(&snapshot.config).expect("to_value");
+    assert_eq!(
+        stored_json, expected_json,
+        "backfilled config_json must equal serde_json::to_value(&snapshot.config)",
     );
 
     // Canonical-hash lookup via the public read API now resolves.
@@ -497,15 +506,16 @@ FROM new_data"
         "resolved snapshot must round-trip the original metric",
     );
 
-    // Idempotency: re-running backfill is a no-op (filter is `canonical_hash = 0`,
-    // so the just-backfilled row is excluded). Run it again, confirm the
-    // column value is unchanged.
+    // Idempotency: re-running backfill is a no-op (filter is
+    // `canonical_hash = 0 OR config_json = ''`, so the just-backfilled
+    // row is excluded). Run it again, confirm both columns unchanged.
     backfill_config_snapshot_canonical_hash(&clickhouse)
         .await
         .unwrap();
     let again_response = clickhouse
         .run_query_synchronous_no_params(format!(
-            "SELECT toString(canonical_hash) AS canonical_hash FROM ConfigSnapshot FINAL \
+            "SELECT toString(canonical_hash) AS canonical_hash, config_json \
+             FROM ConfigSnapshot FINAL \
              WHERE hash = toUInt256('{legacy_decimal}') FORMAT JSONEachRow"
         ))
         .await
@@ -514,7 +524,13 @@ FROM new_data"
     assert_eq!(
         again_row["canonical_hash"].as_str().unwrap(),
         expected_canonical_decimal,
-        "backfill must be idempotent",
+        "backfill must be idempotent on canonical_hash",
+    );
+    let again_json: serde_json::Value =
+        serde_json::from_str(again_row["config_json"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        again_json, expected_json,
+        "backfill must be idempotent on config_json",
     );
 }
 
@@ -615,9 +631,11 @@ optimize = "max"
         .expect("backfill should succeed even with unparseable row present");
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Good row got backfilled — canonical_hash now matches expected.
+    // Good row got backfilled — both canonical_hash AND config_json
+    // populated.
     let good_query = format!(
-        "SELECT toString(canonical_hash) AS canonical_hash FROM ConfigSnapshot FINAL \
+        "SELECT toString(canonical_hash) AS canonical_hash, config_json \
+         FROM ConfigSnapshot FINAL \
          WHERE hash = toUInt256('{good_legacy_decimal}') FORMAT JSONEachRow"
     );
     let good_response = clickhouse
@@ -630,10 +648,16 @@ optimize = "max"
         good_canonical.to_decimal_string(),
         "well-formed row must be backfilled despite a malformed sibling",
     );
+    assert_ne!(
+        good_row["config_json"].as_str().unwrap(),
+        "",
+        "well-formed row's config_json must be populated, not the sentinel",
+    );
 
-    // Bad row stayed at canonical_hash = 0 (the sentinel).
+    // Bad row stayed at canonical_hash = 0 AND config_json = '' (both sentinels).
     let bad_query = format!(
-        "SELECT toString(canonical_hash) AS canonical_hash FROM ConfigSnapshot FINAL \
+        "SELECT toString(canonical_hash) AS canonical_hash, config_json \
+         FROM ConfigSnapshot FINAL \
          WHERE hash = toUInt256('{bad_legacy_decimal}') FORMAT JSONEachRow"
     );
     let bad_response = clickhouse
@@ -645,6 +669,11 @@ optimize = "max"
         bad_row["canonical_hash"].as_str().unwrap(),
         "0",
         "unparseable row must keep the canonical_hash = 0 sentinel — backfill is best-effort",
+    );
+    assert_eq!(
+        bad_row["config_json"].as_str().unwrap(),
+        "",
+        "unparseable row must keep the config_json = '' sentinel — backfill is all-or-nothing per row",
     );
 }
 

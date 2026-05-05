@@ -69,14 +69,24 @@ impl ConfigQueries for ClickHouseConnectionInfo {
         ConfigSnapshot::from_stored(&row.config, row.extra_templates, row.tags, &snapshot_hash)
     }
 
-    /// Writes a snapshot to `ConfigSnapshot` populating BOTH `hash`
-    /// (legacy canonical-TOML-bytes) and `canonical_hash` (structural).
-    /// Either column dispatches the read path correctly via
-    /// `get_config_snapshot`.
+    /// Writes a snapshot to `ConfigSnapshot` populating ALL FOUR
+    /// canonical-form columns:
+    ///
+    /// - `hash`           (legacy canonical-TOML-bytes hash)
+    /// - `config`         (legacy TOML-text storage)
+    /// - `canonical_hash` (structural hash; PR #7419)
+    /// - `config_json`    (canonical JSON storage; this PR)
+    ///
+    /// Either hash column dispatches the read path correctly via
+    /// `get_config_snapshot`. Either content column can hydrate the
+    /// snapshot, but `config_json` is preferred — it doesn't require
+    /// re-parsing TOML through whatever the *current* `StoredConfig`
+    /// shape happens to be.
     async fn write_config_snapshot(&self, snapshot: &ConfigSnapshot) -> Result<(), DelayedError> {
         #[derive(Serialize)]
         struct ConfigSnapshotRow<'a> {
             config: &'a str,
+            config_json: &'a str,
             extra_templates: &'a HashMap<String, String>,
             hash: &'a str,
             canonical_hash: &'a str,
@@ -84,18 +94,30 @@ impl ConfigQueries for ClickHouseConnectionInfo {
             tags: &'a HashMap<String, String>,
         }
 
-        // The legacy hash basis lives on `snapshot.hash`. Compute the
-        // canonical structural hash separately so both columns are
-        // populated on every write — that's what makes scheme dispatch
-        // in `get_config_snapshot` work for both old and new lookups.
-        let legacy_hash = snapshot.hash.clone();
-        let canonical_hash = snapshot.config.canonical_hash().map_err(|e| {
+        // Pull the canonical form (structural JSON + identity hash) in
+        // one pass via `ConfigSnapshot::to_canonical_form`. Same helper
+        // PG uses; same encapsulation — we don't care here that the
+        // canonical mechanism is `serde_json::to_value`.
+        let canonical = snapshot.to_canonical_form().map_err(|e| {
             DelayedError::new(ErrorDetails::Serialization {
-                message: format!("Failed to compute canonical hash for snapshot write: {e}"),
+                message: format!("Failed to compute canonical form for snapshot write: {e}"),
             })
         })?;
-        let legacy_decimal = legacy_hash.to_decimal_string().to_string();
-        let canonical_decimal = canonical_hash.to_decimal_string().to_string();
+
+        let legacy_decimal = snapshot.hash.to_decimal_string().to_string();
+        let canonical_decimal = canonical.hash.to_decimal_string().to_string();
+        // Serialize the canonical JSON to a String for ClickHouse's
+        // `String` column. CH doesn't have a native `JSONB` type
+        // pre-25.x; storing as compact JSON text is the broadly-
+        // compatible choice. The JSON is byte-stable for any given
+        // `serde_json::Value` (no key ordering ambiguity in compact
+        // form), but consumers should still hash via
+        // `canonical_hash_value` rather than over the text.
+        let canonical_json_string = serde_json::to_string(canonical.as_jsonb()).map_err(|e| {
+            DelayedError::new(ErrorDetails::Serialization {
+                message: format!("Failed to serialize canonical JSON for CH write: {e}"),
+            })
+        })?;
 
         let config_string = toml::to_string(&snapshot.config).map_err(|e| {
             DelayedError::new(ErrorDetails::Serialization {
@@ -105,6 +127,7 @@ impl ConfigQueries for ClickHouseConnectionInfo {
 
         let row = ConfigSnapshotRow {
             config: &config_string,
+            config_json: &canonical_json_string,
             extra_templates: &snapshot.extra_templates,
             hash: &legacy_decimal,
             canonical_hash: &canonical_decimal,
@@ -120,16 +143,17 @@ impl ConfigQueries for ClickHouseConnectionInfo {
 
         let external_data = ExternalDataInfo {
             external_data_name: "new_data".to_string(),
-            structure: "config String, extra_templates Map(String, String), hash String, canonical_hash String, tensorzero_version String, tags Map(String, String)".to_string(),
+            structure: "config String, config_json String, extra_templates Map(String, String), hash String, canonical_hash String, tensorzero_version String, tags Map(String, String)".to_string(),
             format: "JSONEachRow".to_string(),
             data: json_data,
         };
 
         let query = format!(
             r"INSERT INTO ConfigSnapshot
-(config, extra_templates, hash, canonical_hash, tensorzero_version, tags, created_at, last_used)
+(config, config_json, extra_templates, hash, canonical_hash, tensorzero_version, tags, created_at, last_used)
 SELECT
     new_data.config,
+    new_data.config_json,
     new_data.extra_templates,
     toUInt256(new_data.hash) as hash,
     toUInt256(new_data.canonical_hash) as canonical_hash,
@@ -150,28 +174,31 @@ FROM new_data"
     }
 }
 
-/// Best-effort backfill of the `canonical_hash` column on `ConfigSnapshot`
-/// rows that predate it.
+/// Best-effort backfill of the `canonical_hash` and `config_json`
+/// columns on `ConfigSnapshot` rows that predate them.
 ///
-/// New rows are written with both `hash` and `canonical_hash` populated;
-/// rows that existed before migration `0054` ran have `canonical_hash = 0`
-/// (the `DEFAULT` we picked because UInt256 has no NULL). This function
-/// scans for those rows, re-parses each row's `config` (TOML) text into
-/// a `StoredConfig`, computes the structural canonical hash, and
-/// re-inserts the row with the new column populated. ClickHouse's
-/// `ReplacingMergeTree` engine deduplicates by the `(hash)` ORDER BY
-/// key on background merges; reads use `FINAL` so the new version is
-/// observed immediately.
+/// New rows are written with all four canonical-form columns
+/// populated (`hash` + `config` legacy, `canonical_hash` + `config_json`
+/// canonical). Rows that existed before migration `0054` ran have
+/// `canonical_hash = 0` and `config_json = ''` (the column defaults
+/// we picked because `UInt256` and `String` have no NULL). This
+/// function scans for rows missing the canonical pair, re-parses
+/// each row's `config` (TOML) text into a `StoredConfig`, derives
+/// the canonical form via `to_canonical_form` (single walk of the
+/// content), and re-inserts the row with both new columns populated.
+/// ClickHouse's `ReplacingMergeTree` engine deduplicates by the
+/// `(hash)` ORDER BY key on background merges; reads use `FINAL` so
+/// the new version is observed immediately.
 ///
 /// Per-row failures are logged at `error!` level (not `warn!`) and
-/// skipped — startup continues even if every row fails. A skipped row
-/// remains readable via the legacy `hash` lookup; only canonical-hash
-/// lookups against it return not-found, which is the same behavior as
-/// if the backfill had not run at all.
+/// skipped — startup continues even if every row fails. A skipped
+/// row remains readable via the legacy `hash` lookup; only
+/// canonical-hash lookups against it return not-found, which is the
+/// same behavior as if the backfill had not run at all.
 ///
-/// Idempotent: filters by `canonical_hash = 0`, so a row that was
-/// already backfilled is never touched again. Cooperative — no locks
-/// held; concurrent writers are safe.
+/// Idempotent: filters by `canonical_hash = 0 OR config_json = ''`,
+/// so a row that was already backfilled is never touched again.
+/// Cooperative — no locks held; concurrent writers are safe.
 pub async fn backfill_config_snapshot_canonical_hash(
     clickhouse: &ClickHouseConnectionInfo,
 ) -> Result<(), Error> {
@@ -183,14 +210,16 @@ pub async fn backfill_config_snapshot_canonical_hash(
         config: String,
     }
 
-    // Sentinel: rows with `canonical_hash = 0` were written before
-    // migration 0054 added the column (or by a write that failed to
-    // populate it — also worth surfacing). The Blake3 collision space
-    // makes a real config canonicalizing to literal `0` astronomically
-    // unlikely.
+    // Sentinels: rows with `canonical_hash = 0` or `config_json = ''`
+    // were written before migration 0054 added the columns (or by a
+    // write that failed to populate them — also worth surfacing).
+    // Blake3 collision space makes a real config canonicalizing to
+    // literal `0` astronomically unlikely; an empty string can't
+    // collide with real canonical JSON content (the canonical form of
+    // any non-empty `StoredConfig` is at minimum `"{}"`).
     let scan_query = "SELECT toString(hash) AS hash, config \
                       FROM ConfigSnapshot FINAL \
-                      WHERE canonical_hash = 0 \
+                      WHERE canonical_hash = 0 OR config_json = '' \
                       FORMAT JSONEachRow"
         .to_string();
     let response = clickhouse
@@ -227,12 +256,12 @@ pub async fn backfill_config_snapshot_canonical_hash(
                 continue;
             }
         };
-        let canonical_hash = match stored.canonical_hash() {
-            Ok(h) => h,
+        let canonical = match stored.to_canonical_form() {
+            Ok(c) => c,
             Err(e) => {
                 tracing::error!(
                     hash = %row.hash,
-                    "ConfigSnapshot backfill: skipping (canonical_hash computation failed \
+                    "ConfigSnapshot backfill: skipping (canonical-form derivation failed \
                      — the algorithm should be infallible for any valid StoredConfig; \
                      please file a bug): {e}"
                 );
@@ -240,32 +269,53 @@ pub async fn backfill_config_snapshot_canonical_hash(
                 continue;
             }
         };
-        let canonical_decimal = canonical_hash.to_decimal_string();
+        let canonical_decimal = canonical.hash.to_decimal_string();
+        let canonical_json_string = match serde_json::to_string(canonical.as_jsonb()) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(
+                    hash = %row.hash,
+                    "ConfigSnapshot backfill: skipping (canonical JSON serialization failed): {e}"
+                );
+                total_skipped += 1;
+                continue;
+            }
+        };
 
-        // Re-INSERT the row with `canonical_hash` populated. The
+        // Re-INSERT the row with both new columns populated. The
         // ReplacingMergeTree deduplicates by `(hash)` ORDER BY key on
         // background merges; reads using `FINAL` see the new version
         // immediately. We preserve `created_at` from the original row
         // and refresh `last_used` to now64() — same convention as
-        // `write_config_snapshot`.
+        // `write_config_snapshot`. We use external data for the
+        // canonical JSON so single-quotes / backslashes inside it
+        // can't break the SQL.
         let legacy_decimal = &row.hash;
+        let external_data = ExternalDataInfo {
+            external_data_name: "backfill_data".to_string(),
+            structure: "config_json String".to_string(),
+            format: "JSONEachRow".to_string(),
+            data: serde_json::json!({"config_json": canonical_json_string}).to_string(),
+        };
         let update_query = format!(
             r"INSERT INTO ConfigSnapshot
-(config, extra_templates, hash, canonical_hash, tensorzero_version, tags, created_at, last_used)
+(config, config_json, extra_templates, hash, canonical_hash, tensorzero_version, tags, created_at, last_used)
 SELECT
-    config,
-    extra_templates,
-    hash,
+    cs.config,
+    backfill_data.config_json,
+    cs.extra_templates,
+    cs.hash,
     toUInt256('{canonical_decimal}') as canonical_hash,
-    tensorzero_version,
-    tags,
-    created_at,
+    cs.tensorzero_version,
+    cs.tags,
+    cs.created_at,
     now64() as last_used
-FROM ConfigSnapshot FINAL
-WHERE hash = toUInt256('{legacy_decimal}')"
+FROM ConfigSnapshot FINAL AS cs
+CROSS JOIN backfill_data
+WHERE cs.hash = toUInt256('{legacy_decimal}')"
         );
         if let Err(e) = clickhouse
-            .run_query_synchronous_no_params(update_query)
+            .run_query_with_external_data(external_data, update_query)
             .await
         {
             tracing::error!(
