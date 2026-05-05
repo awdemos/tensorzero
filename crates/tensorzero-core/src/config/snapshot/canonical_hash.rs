@@ -182,13 +182,48 @@ impl StoredConfig {
     ///   "logical config didn't change but hash drifted" — and it's
     ///   deliberate: a serialization-shape change *is* a real change.
     pub fn canonical_hash(&self) -> Result<SnapshotHash, Error> {
-        let value = serde_json::to_value(self).map_err(|e| {
+        Ok(self.to_canonical_form()?.hash)
+    }
+
+    /// Return the canonical JSON value AND its structural hash in one
+    /// pass.
+    ///
+    /// Both derivations share `serde_json::to_value(self)` as their
+    /// intermediate, so callers that need both — e.g. PG
+    /// `write_config_snapshot` populating `config_jsonb` and
+    /// `canonical_hash` together — should use this rather than calling
+    /// `serde_json::to_value(&self)` and `self.canonical_hash()`
+    /// separately. Avoids running the conversion twice and keeps the
+    /// canonical-form internals (i.e. "we hash the JSON form") inside
+    /// this module.
+    ///
+    /// Stability properties match `canonical_hash()` exactly — see its
+    /// doc above.
+    pub fn to_canonical_form(&self) -> Result<CanonicalForm, Error> {
+        let json = serde_json::to_value(self).map_err(|e| {
             Error::new(ErrorDetails::Serialization {
                 message: format!("StoredConfig should always serialize to JSON: {e}"),
             })
         })?;
-        Ok(canonical_hash_value(&value))
+        let hash = canonical_hash_value(&json);
+        Ok(CanonicalForm { json, hash })
     }
+}
+
+/// Paired output of `StoredConfig::to_canonical_form`: the canonical
+/// JSON form of the config (the storage representation) and its
+/// structural hash (the identity). Both are derived from the same
+/// `serde_json::to_value(self)` walk; consumers receive them together
+/// so the conversion isn't repeated.
+pub struct CanonicalForm {
+    /// Canonical JSON form of the `StoredConfig`. This is what
+    /// gets persisted in `config_snapshots.config_jsonb` (PG) and is
+    /// the input the structural hash is computed over.
+    pub json: Value,
+    /// Structural hash of `json`, tagged as `Canonical`. Persisted in
+    /// `config_snapshots.canonical_hash` (PG/CH) and used to look up
+    /// the row by content-addressed identity.
+    pub hash: SnapshotHash,
 }
 
 /// Hash a `serde_json::Value` using the canonical encoding above. Public
