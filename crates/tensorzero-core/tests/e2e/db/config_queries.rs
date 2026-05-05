@@ -1280,6 +1280,278 @@ model = "bf_{id}"
     assert_eq!(after_again, expected, "backfill must be idempotent");
 }
 
+/// Backfill must skip rows whose `config TEXT` no longer parses as a
+/// `StoredConfig` — and continue processing the rest of the table. We
+/// fail-soft per row (log + skip) so a single broken legacy row does
+/// not block startup. Verifies the contract end-to-end: insert one
+/// backfillable row alongside one whose `config TEXT` is intentional
+/// garbage, run the backfill, assert the good row got populated and
+/// the bad row stayed `NULL`.
+#[tokio::test]
+async fn backfill_skips_unparseable_legacy_rows_postgres() {
+    use tensorzero_core::db::postgres::config_queries::backfill_config_snapshot_jsonb;
+    let postgres = get_test_postgres().await;
+    let pool = postgres.get_pool().unwrap();
+
+    // Good row: standard backfillable shape.
+    let good_id = Uuid::now_v7();
+    let good_toml = format!(
+        r#"
+[models.good_{good_id}]
+routing = ["dummy"]
+
+[models.good_{good_id}.providers.dummy]
+type = "dummy"
+model_name = "test"
+
+[functions.good_{good_id}]
+type = "chat"
+
+[functions.good_{good_id}.variants.only]
+type = "chat_completion"
+model = "good_{good_id}"
+"#
+    );
+    let good_snapshot =
+        ConfigSnapshot::new_from_toml_string(&good_toml, HashMap::new()).expect("parse good");
+    let good_hash = good_snapshot.hash.clone();
+    insert_legacy_snapshot_row(&postgres, &good_snapshot).await;
+
+    // Bad row: synthesize a fake hash and insert garbage TOML directly.
+    // The hash bytes don't have to match the (un-)content; the backfill
+    // looks up by `hash` and tries to reparse `config`.
+    let bad_hash_bytes = blake3::hash(format!("bad-row-{}", Uuid::now_v7()).as_bytes());
+    let bad_hash = bad_hash_bytes.as_bytes().to_vec();
+    sqlx::query(
+        r"INSERT INTO tensorzero.config_snapshots (hash, config, extra_templates, tensorzero_version, tags, config_jsonb)
+           VALUES ($1, $2, '{}'::jsonb, $3, '{}'::jsonb, NULL)
+           ON CONFLICT (hash) DO UPDATE SET config_jsonb = NULL, config = EXCLUDED.config",
+    )
+    .bind(&bad_hash)
+    .bind("this is not valid toml :::: !! [malformed garbage")
+    .bind(tensorzero_core::endpoints::status::TENSORZERO_VERSION)
+    .execute(pool)
+    .await
+    .expect("bad row insert should succeed");
+
+    // Run the backfill. Must NOT panic despite the bad row.
+    backfill_config_snapshot_jsonb(pool)
+        .await
+        .expect("backfill should succeed even with unparseable rows present");
+
+    // Good row got backfilled.
+    let good_jsonb: Option<serde_json::Value> =
+        sqlx::query_scalar(r"SELECT config_jsonb FROM tensorzero.config_snapshots WHERE hash = $1")
+            .bind(good_hash.as_bytes())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert!(
+        good_jsonb.is_some(),
+        "well-formed legacy row must be backfilled despite a malformed sibling row"
+    );
+
+    // Bad row stayed NULL — backfill skipped it.
+    let bad_jsonb: Option<serde_json::Value> =
+        sqlx::query_scalar(r"SELECT config_jsonb FROM tensorzero.config_snapshots WHERE hash = $1")
+            .bind(&bad_hash)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert!(
+        bad_jsonb.is_none(),
+        "unparseable row must remain NULL — backfill is best-effort, no fabricated content",
+    );
+
+    // Bad row's canonical_hash also still NULL (skip applies to BOTH columns).
+    let bad_canonical: Option<Vec<u8>> = sqlx::query_scalar(
+        r"SELECT canonical_hash FROM tensorzero.config_snapshots WHERE hash = $1",
+    )
+    .bind(&bad_hash)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert!(
+        bad_canonical.is_none(),
+        "canonical_hash must also stay NULL on a skipped row",
+    );
+}
+
+/// Backfill must leave already-backfilled rows untouched. `WHERE
+/// config_jsonb IS NULL OR canonical_hash IS NULL` filters them out at
+/// the SQL level; the COALESCE guards the UPDATE itself. Together they
+/// promise: if a row had a canonical_hash before, it has the same
+/// canonical_hash after, even if a backfill rerun would compute
+/// something different (which it shouldn't, but the guard is
+/// defensive).
+#[tokio::test]
+#[expect(clippy::disallowed_methods)]
+async fn backfill_leaves_already_populated_rows_unchanged_postgres() {
+    use tensorzero_core::db::postgres::config_queries::backfill_config_snapshot_jsonb;
+    let postgres = get_test_postgres().await;
+    let pool = postgres.get_pool().unwrap();
+
+    let id = Uuid::now_v7();
+    let toml = format!(
+        r#"
+[models.preserved_{id}]
+routing = ["dummy"]
+
+[models.preserved_{id}.providers.dummy]
+type = "dummy"
+model_name = "test"
+
+[functions.preserved_{id}]
+type = "chat"
+
+[functions.preserved_{id}.variants.only]
+type = "chat_completion"
+model = "preserved_{id}"
+"#
+    );
+    let snapshot = ConfigSnapshot::new_from_toml_string(&toml, HashMap::new()).expect("parse");
+
+    // Write through the normal path — both columns populated.
+    postgres.write_config_snapshot(&snapshot).await.unwrap();
+
+    // Capture before-state.
+    let before_jsonb: serde_json::Value =
+        sqlx::query_scalar(r"SELECT config_jsonb FROM tensorzero.config_snapshots WHERE hash = $1")
+            .bind(snapshot.hash.as_bytes())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let before_canonical: Vec<u8> = sqlx::query_scalar(
+        r"SELECT canonical_hash FROM tensorzero.config_snapshots WHERE hash = $1",
+    )
+    .bind(snapshot.hash.as_bytes())
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    // Run backfill — should NOT touch this row.
+    backfill_config_snapshot_jsonb(pool).await.unwrap();
+
+    // After-state matches before-state byte-for-byte.
+    let after_jsonb: serde_json::Value =
+        sqlx::query_scalar(r"SELECT config_jsonb FROM tensorzero.config_snapshots WHERE hash = $1")
+            .bind(snapshot.hash.as_bytes())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let after_canonical: Vec<u8> = sqlx::query_scalar(
+        r"SELECT canonical_hash FROM tensorzero.config_snapshots WHERE hash = $1",
+    )
+    .bind(snapshot.hash.as_bytes())
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        after_jsonb, before_jsonb,
+        "backfill must not rewrite already-populated config_jsonb",
+    );
+    assert_eq!(
+        after_canonical, before_canonical,
+        "backfill must not rewrite already-populated canonical_hash",
+    );
+}
+
+/// Backfill on an empty table is a no-op — no panic, no error, no
+/// log spam. Cheap regression for the trivial case.
+#[tokio::test]
+async fn backfill_no_op_on_empty_state_postgres() {
+    use tensorzero_core::db::postgres::config_queries::backfill_config_snapshot_jsonb;
+    let postgres = get_test_postgres().await;
+    let pool = postgres.get_pool().unwrap();
+    // We can't really nuke the table (other tests use it), but running
+    // the backfill should be safe regardless of whether there are
+    // unbackfilled rows or not. The contract is: it never panics, never
+    // errors, returns Ok.
+    backfill_config_snapshot_jsonb(pool)
+        .await
+        .expect("backfill must succeed regardless of table state");
+}
+
+/// Backfill must populate `canonical_hash` even on a row whose
+/// `config_jsonb` has *already* been backfilled but whose
+/// `canonical_hash` was never written. Exercises the partial-state
+/// case — relevant if a previous backfill attempt completed JSONB but
+/// crashed before getting to canonical_hash, or if we ever ship
+/// the columns in two separate migrations. The `WHERE … IS NULL OR …
+/// IS NULL` filter handles both flavors of incompletion.
+#[tokio::test]
+async fn backfill_populates_canonical_hash_when_config_jsonb_already_present_postgres() {
+    use tensorzero_core::db::postgres::config_queries::backfill_config_snapshot_jsonb;
+    let postgres = get_test_postgres().await;
+    let pool = postgres.get_pool().unwrap();
+
+    let id = Uuid::now_v7();
+    let toml = format!(
+        r#"
+[models.partial_{id}]
+routing = ["dummy"]
+
+[models.partial_{id}.providers.dummy]
+type = "dummy"
+model_name = "test"
+
+[functions.partial_{id}]
+type = "chat"
+
+[functions.partial_{id}.variants.only]
+type = "chat_completion"
+model = "partial_{id}"
+"#
+    );
+    let snapshot = ConfigSnapshot::new_from_toml_string(&toml, HashMap::new()).expect("parse");
+    let pre_jsonb = serde_json::to_value(&snapshot.config).expect("to_value");
+
+    // Insert with config_jsonb populated but canonical_hash NULL.
+    let config_string = toml::to_string(&snapshot.config).expect("to TOML");
+    sqlx::query(
+        r"INSERT INTO tensorzero.config_snapshots (hash, config, extra_templates, tensorzero_version, tags, config_jsonb, canonical_hash)
+           VALUES ($1, $2, '{}'::jsonb, $3, '{}'::jsonb, $4, NULL)
+           ON CONFLICT (hash) DO UPDATE SET canonical_hash = NULL, config_jsonb = EXCLUDED.config_jsonb",
+    )
+    .bind(snapshot.hash.as_bytes())
+    .bind(&config_string)
+    .bind(tensorzero_core::endpoints::status::TENSORZERO_VERSION)
+    .bind(&pre_jsonb)
+    .execute(pool)
+    .await
+    .expect("partial-state insert should succeed");
+
+    // Run backfill.
+    backfill_config_snapshot_jsonb(pool).await.unwrap();
+
+    // canonical_hash now equals StoredConfig::canonical_hash().
+    let after: Vec<u8> = sqlx::query_scalar(
+        r"SELECT canonical_hash FROM tensorzero.config_snapshots WHERE hash = $1",
+    )
+    .bind(snapshot.hash.as_bytes())
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let expected = snapshot.config.canonical_hash().expect("canonical_hash");
+    assert_eq!(
+        after.as_slice(),
+        expected.as_bytes(),
+        "partial-state row's canonical_hash must equal StoredConfig::canonical_hash",
+    );
+
+    // config_jsonb stays put — wasn't touched.
+    let after_jsonb: serde_json::Value =
+        sqlx::query_scalar(r"SELECT config_jsonb FROM tensorzero.config_snapshots WHERE hash = $1")
+            .bind(snapshot.hash.as_bytes())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        after_jsonb, pre_jsonb,
+        "config_jsonb must remain the value the partial-state insert wrote",
+    );
+}
+
 /// Canonical invariant: `get_config_snapshot` reads `config_jsonb` (JSON
 /// is the source of truth). `config TEXT` (TOML) is the deprecated
 /// migration column; reading it on the canonical path would force the
