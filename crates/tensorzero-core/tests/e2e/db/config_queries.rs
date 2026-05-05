@@ -1041,7 +1041,11 @@ async fn snapshots_containing_finds_variant_version_via_explicit_fragment() {
     // discriminator. (Using `temperature` rather than `version` since
     // the latter doesn't exist on `UninitializedVariantConfig` until
     // per-object metadata lands; `temperature` round-trips into JSONB
-    // as a number, so containment queries work the same way.)
+    // as a number, so containment queries work the same way.) We pick
+    // values that are exactly representable in `f32` — `temperature`
+    // is `f32` in `StoredConfig`, so a non-exact value like `0.3`
+    // widens to `0.30000001192092896` in JSONB and never matches a
+    // numerically-typed needle of `0.3`.
     let config_toml = format!(
         r#"
 [models.m_{id}]
@@ -1057,31 +1061,18 @@ type = "chat"
 [functions.fn_{id}.variants.a]
 type = "chat_completion"
 model = "m_{id}"
-temperature = 0.3
+temperature = 0.5
 
 [functions.fn_{id}.variants.b]
 type = "chat_completion"
 model = "m_{id}"
-temperature = 0.5
+temperature = 0.25
 "#
     );
     let snap = ConfigSnapshot::new_from_toml_string(&config_toml, HashMap::new()).unwrap();
     postgres.write_config_snapshot(&snap).await.unwrap();
 
     // Use `snapshots_containing` with an explicit nested fragment.
-    let hits_a03 = postgres
-        .snapshots_containing(serde_json::json!({
-            "functions": {format!("fn_{id}"): {"variants": {"a": {"temperature": 0.3}}}}
-        }))
-        .await
-        .unwrap();
-    assert_eq!(
-        hits_a03.len(),
-        1,
-        "variant a at temperature 0.3 should match"
-    );
-    assert_eq!(hits_a03[0].as_bytes(), snap.hash.as_bytes());
-
     let hits_a05 = postgres
         .snapshots_containing(serde_json::json!({
             "functions": {format!("fn_{id}"): {"variants": {"a": {"temperature": 0.5}}}}
@@ -1090,22 +1081,35 @@ temperature = 0.5
         .unwrap();
     assert_eq!(
         hits_a05.len(),
+        1,
+        "variant a at temperature 0.5 should match"
+    );
+    assert_eq!(hits_a05[0].as_bytes(), snap.hash.as_bytes());
+
+    let hits_a025 = postgres
+        .snapshots_containing(serde_json::json!({
+            "functions": {format!("fn_{id}"): {"variants": {"a": {"temperature": 0.25}}}}
+        }))
+        .await
+        .unwrap();
+    assert_eq!(
+        hits_a025.len(),
         0,
-        "variant a is at temperature 0.3, not 0.5; should not match",
+        "variant a is at temperature 0.5, not 0.25; should not match",
     );
 
     // Equivalent via the path-value convenience.
-    let hits_b05 = postgres
+    let hits_b025 = postgres
         .snapshots_with_path_value(
             &format!("functions/fn_{id}/variants/b/temperature"),
-            &serde_json::json!(0.5),
+            &serde_json::json!(0.25),
         )
         .await
         .unwrap();
     assert_eq!(
-        hits_b05.len(),
+        hits_b025.len(),
         1,
-        "variant b at temperature 0.5 should match"
+        "variant b at temperature 0.25 should match"
     );
 }
 
@@ -1174,9 +1178,17 @@ model = "m_{id}"
     let snap = ConfigSnapshot::new_from_toml_string(&toml, HashMap::new()).unwrap();
     postgres.write_config_snapshot(&snap).await.unwrap();
 
+    // The function name `f_{id}` is unique to this run, so any field
+    // present on the function in the canonical form makes a sufficient
+    // discriminator. We use `type: "chat"` since it's part of the
+    // internally-tagged enum's serialization and is guaranteed to be
+    // in the JSONB. (Avoid using `version` here — that field doesn't
+    // exist on `UninitializedFunctionConfig` yet, and earlier revisions
+    // of this test inherited a `version = 5` TOML line that no longer
+    // parses on this branch.)
     let needle = serde_json::json!({
         "functions": {
-            format!("f_{id}"): { "version": 5 }
+            format!("f_{id}"): { "type": "chat" }
         }
     });
     let hits: Vec<Vec<u8>> = sqlx::query_scalar(
