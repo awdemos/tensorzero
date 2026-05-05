@@ -123,6 +123,22 @@ impl ConfigSnapshot {
         Self::new(config, extra_templates)
     }
 
+    /// Return the snapshot's canonical form: the storage value to
+    /// persist in `config_snapshots.config_jsonb` plus the structural
+    /// identity hash to persist in `config_snapshots.canonical_hash`.
+    /// Both are derived from a single walk of the underlying
+    /// `StoredConfig` — callers that need the JSONB and the hash
+    /// together should prefer this over computing them separately.
+    /// The canonical-form mechanism (currently `serde_json::to_value`)
+    /// is encapsulated; callers interact with the result through
+    /// `CanonicalForm::as_jsonb()` / `into_jsonb()` and the public
+    /// `hash` field.
+    pub fn to_canonical_form(
+        &self,
+    ) -> Result<crate::config::snapshot::canonical_hash::CanonicalForm, crate::error::Error> {
+        self.config.to_canonical_form()
+    }
+
     /// Create an empty ConfigSnapshot for testing when the actual config doesn't matter.
     #[cfg(any(test, feature = "e2e_tests"))]
     pub fn new_empty_for_test() -> Self {

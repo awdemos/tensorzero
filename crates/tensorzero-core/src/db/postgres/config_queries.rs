@@ -122,22 +122,21 @@ impl ConfigQueries for PostgresConnectionInfo {
                 message: e.to_string(),
             })
         })?;
-        // Canonical JSON form of the snapshot config. Persisted alongside the
-        // TOML so snapshots can be queried by per-resource version (e.g.
-        // `config_jsonb @> '{"functions":{"foo":{"version":3}}}'`) using the
-        // GIN index on `config_jsonb`. The TOML column is kept as a
-        // migration artifact only; JSON is the source of truth for reads.
-        let config_jsonb_value = serde_json::to_value(&snapshot.config).map_err(|e| {
-            DelayedError::new(ErrorDetails::Serialization {
-                message: format!("Failed to serialize config snapshot to JSON: {e}"),
-            })
-        })?;
-        // Structural hash of the canonical JSON form. Stable across
+        // Canonical form of the snapshot — the storage value for the
+        // `config_jsonb` column plus the structural identity hash for
+        // `canonical_hash`. Derived in one pass via
+        // `ConfigSnapshot::to_canonical_form()`. The JSONB column is
+        // queryable by per-resource version using the GIN index on
+        // `config_jsonb` (e.g. `@> '{"functions":{"foo":{"version":3}}}'`);
+        // the hash is the content-addressed identity that lookups
+        // dispatch to via `SnapshotHashScheme::Canonical`. The TOML
+        // column is kept as a migration artifact only; the canonical
+        // form is the source of truth for reads. Hash is stable across
         // serialize/deserialize round-trips, unlike the legacy
         // canonical-TOML-bytes hash in `snapshot.hash`.
-        let canonical_hash = snapshot.config.canonical_hash().map_err(|e| {
+        let canonical = snapshot.to_canonical_form().map_err(|e| {
             DelayedError::new(ErrorDetails::Serialization {
-                message: format!("Failed to compute canonical hash: {e}"),
+                message: format!("Failed to compute canonical form for snapshot write: {e}"),
             })
         })?;
 
@@ -155,8 +154,8 @@ impl ConfigQueries for PostgresConnectionInfo {
         )
         .bind(snapshot.hash.as_bytes())
         .bind(&config_string)
-        .bind(&config_jsonb_value)
-        .bind(canonical_hash.as_bytes())
+        .bind(canonical.as_jsonb())
+        .bind(canonical.hash.as_bytes())
         .bind(&extra_templates_json)
         .bind(crate::endpoints::status::TENSORZERO_VERSION)
         .bind(&tags_json)
