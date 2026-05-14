@@ -23,8 +23,43 @@ use uuid::Uuid;
 use crate::common::get_gateway_endpoint;
 use tensorzero_core::db::clickhouse::test_helpers::get_clickhouse;
 use tensorzero_core::db::delegating_connection::{DelegatingDatabaseConnection, PrimaryDatastore};
-use tensorzero_core::db::feedback::{FeedbackQueries, FeedbackRow};
+use tensorzero_core::db::feedback::{DemonstrationFeedbackRow, FeedbackQueries, FeedbackRow};
 use tensorzero_core::db::test_helpers::TestDatabaseHelpers;
+
+async fn wait_for_demonstration_feedback(
+    conn: &DelegatingDatabaseConnection,
+    inference_id: Uuid,
+    feedback_id: Uuid,
+) -> DemonstrationFeedbackRow {
+    for attempt in 0..12 {
+        conn.flush_pending_writes().await;
+        conn.sleep_for_writes_to_be_visible().await;
+
+        let feedbacks = conn
+            .query_feedback_by_target_id(inference_id, None, None, Some(100))
+            .await
+            .unwrap();
+
+        if let Some(demo) = feedbacks.iter().find_map(|feedback| match feedback {
+            FeedbackRow::Demonstration(demo) if demo.id == feedback_id => Some(demo),
+            _ => None,
+        }) {
+            return DemonstrationFeedbackRow {
+                id: demo.id,
+                inference_id: demo.inference_id,
+                value: demo.value.clone(),
+                tags: demo.tags.clone(),
+                timestamp: demo.timestamp,
+            };
+        }
+
+        if attempt < 11 {
+            sleep(Duration::from_millis(500)).await;
+        }
+    }
+
+    panic!("Should find demonstration feedback");
+}
 
 #[gtest]
 #[tokio::test]
@@ -1120,19 +1155,7 @@ async fn test_demonstration_feedback_tool() {
     let feedback_id = Uuid::parse_str(feedback_id.as_str().unwrap()).unwrap();
 
     // Check DemonstrationFeedback (tool call)
-    conn.flush_pending_writes().await;
-    conn.sleep_for_writes_to_be_visible().await;
-    let feedbacks = conn
-        .query_feedback_by_target_id(inference_id, None, None, Some(100))
-        .await
-        .unwrap();
-    let demo = feedbacks
-        .iter()
-        .find_map(|f| match f {
-            FeedbackRow::Demonstration(d) if d.id == feedback_id => Some(d),
-            _ => None,
-        })
-        .expect("Should find demonstration feedback");
+    let demo = wait_for_demonstration_feedback(&conn, inference_id, feedback_id).await;
     expect_that!(demo.inference_id, eq(inference_id));
     let retrieved_value = serde_json::from_str::<Value>(&demo.value).unwrap();
     let expected_value = json!([{"type": "tool_call", "id": "tool_call_id", "raw_name": "get_temperature", "raw_arguments": "{\"location\":\"Tokyo\",\"units\":\"celsius\"}", "name": "get_temperature", "arguments": {"location": "Tokyo", "units": "celsius"}}]);
@@ -1325,19 +1348,7 @@ async fn test_demonstration_feedback_dynamic_tool() {
     let feedback_id = Uuid::parse_str(feedback_id.as_str().unwrap()).unwrap();
 
     // Check DemonstrationFeedback (dynamic tool call)
-    conn.flush_pending_writes().await;
-    conn.sleep_for_writes_to_be_visible().await;
-    let feedbacks = conn
-        .query_feedback_by_target_id(inference_id, None, None, Some(100))
-        .await
-        .unwrap();
-    let demo = feedbacks
-        .iter()
-        .find_map(|f| match f {
-            FeedbackRow::Demonstration(d) if d.id == feedback_id => Some(d),
-            _ => None,
-        })
-        .expect("Should find demonstration feedback");
+    let demo = wait_for_demonstration_feedback(&conn, inference_id, feedback_id).await;
     expect_that!(demo.inference_id, eq(inference_id));
     let retrieved_value = serde_json::from_str::<Value>(&demo.value).unwrap();
     let expected_value = json!([{"type": "tool_call", "id": "tool_call_id", "raw_name": "get_humidity", "raw_arguments": "{\"location\":\"Tokyo\"}", "name": "get_humidity", "arguments": {"location": "Tokyo"}}]);
