@@ -341,11 +341,19 @@ async fn create_and_attach_partition_indexes(
         if already_indexed.contains(partition.as_str()) {
             continue;
         }
-        create_partition_index_concurrently(pool, table, column, partition).await?;
-        attach_partition_index(pool, &parent_index, partition, column).await?;
+        if !create_partition_index_concurrently(pool, table, column, partition).await? {
+            continue;
+        }
+        let _ = attach_partition_index(pool, &parent_index, partition, column).await?;
     }
 
     Ok(())
+}
+
+fn is_missing_relation_error(err: &sqlx::Error) -> bool {
+    err.as_database_error()
+        .and_then(|db_err| db_err.code())
+        .is_some_and(|code| code == "42P01")
 }
 
 /// Creates a trigram index concurrently on a single partition.
@@ -354,7 +362,7 @@ async fn create_partition_index_concurrently(
     table: &str,
     column: &str,
     partition: &str,
-) -> Result<(), Error> {
+) -> Result<bool, Error> {
     // TODO(shuyangli): this is not quoted, so special characters (uppercase, hyphens, etc) could break it;
     // we control these names so it's not a big deal today, but consider quoting this in the future.
     let index_name = format!("idx_{partition}_{column}_trgm");
@@ -362,17 +370,20 @@ async fn create_partition_index_concurrently(
         "CREATE INDEX CONCURRENTLY IF NOT EXISTS {index_name} \
          ON tensorzero.{partition} USING GIN (CAST({column} AS TEXT) gin_trgm_ops)"
     );
-    sqlx::raw_sql(AssertSqlSafe(sql))
-        .execute(pool)
-        .await
-        .map_err(|e| {
-            Error::new(ErrorDetails::PostgresQuery {
-                message: format!(
-                    "Failed to create trigram index `{index_name}` on partition `{partition}` of `{table}`: {e}"
-                ),
-            })
-        })?;
-    Ok(())
+    match sqlx::raw_sql(AssertSqlSafe(sql)).execute(pool).await {
+        Ok(_) => Ok(true),
+        Err(e) if is_missing_relation_error(&e) => {
+            tracing::warn!(
+                "Skipping trigram index creation for missing partition `{partition}` of `{table}`"
+            );
+            Ok(false)
+        }
+        Err(e) => Err(Error::new(ErrorDetails::PostgresQuery {
+            message: format!(
+                "Failed to create trigram index `{index_name}` on partition `{partition}` of `{table}`: {e}"
+            ),
+        })),
+    }
 }
 
 /// Attaches a single partition's index to the parent index.
@@ -381,19 +392,22 @@ async fn attach_partition_index(
     parent_index: &str,
     partition: &str,
     column: &str,
-) -> Result<(), Error> {
+) -> Result<bool, Error> {
     let partition_index = format!("idx_{partition}_{column}_trgm");
     let sql = format!(
         "ALTER INDEX tensorzero.{parent_index} \
          ATTACH PARTITION tensorzero.{partition_index}"
     );
-    sqlx::raw_sql(AssertSqlSafe(sql))
-        .execute(pool)
-        .await
-        .map_err(|e| {
-            Error::new(ErrorDetails::PostgresQuery {
-                message: format!("Failed to attach `{partition_index}` to `{parent_index}`: {e}"),
-            })
-        })?;
-    Ok(())
+    match sqlx::raw_sql(AssertSqlSafe(sql)).execute(pool).await {
+        Ok(_) => Ok(true),
+        Err(e) if is_missing_relation_error(&e) => {
+            tracing::warn!(
+                "Skipping trigram index attachment for missing partition index `{partition_index}`"
+            );
+            Ok(false)
+        }
+        Err(e) => Err(Error::new(ErrorDetails::PostgresQuery {
+            message: format!("Failed to attach `{partition_index}` to `{parent_index}`: {e}"),
+        })),
+    }
 }

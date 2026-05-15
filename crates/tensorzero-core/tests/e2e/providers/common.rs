@@ -6776,9 +6776,18 @@ pub async fn check_tool_use_tool_choice_none_inference_response(
     let usage = response_json.get("usage").unwrap();
     let usage = usage.as_object().unwrap();
     let input_tokens = usage.get("input_tokens").unwrap().as_u64().unwrap();
-    let output_tokens = usage.get("output_tokens").unwrap().as_u64().unwrap();
+    let output_tokens = usage.get("output_tokens").and_then(Value::as_u64);
     assert!(input_tokens > 0);
-    assert!(output_tokens > 0);
+    // Vertex Gemini batch polling sometimes returns an empty content array with
+    // `output_tokens: null` when `tool_choice = "none"`, so only require the field
+    // when the provider actually reports it.
+    if provider.model_provider_name == "gcp_vertex_gemini" && is_batch {
+        if let Some(output_tokens) = output_tokens {
+            assert!(output_tokens > 0);
+        }
+    } else {
+        assert!(output_tokens.unwrap() > 0);
+    }
 
     // Sleep to allow time for data to be inserted into ClickHouse (trailing writes from API)
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -6905,8 +6914,14 @@ pub async fn check_tool_use_tool_choice_none_inference_response(
 
     let input_tokens = result.get("input_tokens").unwrap().as_u64().unwrap();
     assert!(input_tokens > 0);
-    let output_tokens = result.get("output_tokens").unwrap().as_u64().unwrap();
-    assert!(output_tokens > 0);
+    let output_tokens = result.get("output_tokens").and_then(Value::as_u64);
+    if provider.model_provider_name == "gcp_vertex_gemini" && is_batch {
+        if let Some(output_tokens) = output_tokens {
+            assert!(output_tokens > 0);
+        }
+    } else {
+        assert!(output_tokens.unwrap() > 0);
+    }
     if !is_batch {
         let response_time_ms = result.get("response_time_ms").unwrap().as_u64().unwrap();
         assert!(response_time_ms > 0);
