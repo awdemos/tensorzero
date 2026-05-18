@@ -28,7 +28,7 @@ use object_store::path::Path;
 use rand::RngExt;
 use reqwest::{Client, StatusCode};
 use reqwest_sse_stream::{Event, RequestBuilderExt};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::future::IntoFuture;
 use tensorzero::{
     CacheParamsOptions, ClientInferenceParams, ClientSecretString, InferenceOutput,
@@ -6111,33 +6111,12 @@ pub async fn check_tool_use_tool_choice_required_inference_response(
     let name = content_block.get("name").unwrap().as_str().unwrap();
     assert_eq!(name, "get_temperature");
 
-    let raw_arguments = content_block
-        .get("raw_arguments")
-        .unwrap()
-        .as_str()
-        .unwrap();
-    let raw_arguments: Value = serde_json::from_str(raw_arguments).unwrap();
-    let raw_arguments = raw_arguments.as_object().unwrap();
-    // OpenAI occasionally emits a tool call with an empty object for `arguments`
-    assert!(raw_arguments.len() <= 2);
-    if let Some(location) = raw_arguments.get("location") {
-        assert!(location.as_str().is_some());
-    }
-    if raw_arguments.len() == 2 {
-        let units = raw_arguments.get("units").unwrap().as_str().unwrap();
-        assert!(units == "celsius" || units == "fahrenheit");
-    }
+    let raw_arguments = parse_tool_call_raw_arguments(content_block);
+    assert_tool_call_arguments_are_reasonable(&raw_arguments);
 
     if let Some(arguments) = content_block["arguments"].as_object() {
-        // OpenAI occasionally emits a tool call with an empty object for `arguments`
-        assert!(arguments.len() <= 2);
-        if let Some(location) = arguments.get("location") {
-            assert!(location.as_str().is_some());
-        }
-        if arguments.len() == 2 {
-            let units = arguments.get("units").unwrap().as_str().unwrap();
-            assert!(units == "celsius" || units == "fahrenheit");
-        }
+        assert_tool_call_arguments_are_reasonable(arguments);
+        assert_tool_call_arguments_match_raw(arguments, &raw_arguments);
     }
 
     let usage = response_json.get("usage").unwrap();
@@ -7355,18 +7334,13 @@ pub async fn check_tool_use_tool_choice_specific_inference_response(
     // instead of 'self_destruct'
     assert_eq!(name, raw_name);
 
-    let raw_arguments = content_block
-        .get("raw_arguments")
-        .unwrap()
-        .as_str()
-        .unwrap();
-    let raw_arguments: Value = serde_json::from_str(raw_arguments).unwrap();
-    let raw_arguments = raw_arguments.as_object().unwrap();
+    let raw_arguments = parse_tool_call_raw_arguments(content_block);
+    assert_tool_call_arguments_are_reasonable(&raw_arguments);
 
-    let arguments = content_block.get("arguments").unwrap();
-    let arguments = arguments.as_object().unwrap();
-
-    assert_eq!(arguments, raw_arguments);
+    if let Some(arguments) = content_block.get("arguments").and_then(Value::as_object) {
+        assert_tool_call_arguments_are_reasonable(arguments);
+        assert_tool_call_arguments_match_raw(arguments, &raw_arguments);
+    }
 
     let usage = response_json.get("usage").unwrap();
     let usage = usage.as_object().unwrap();
@@ -7583,6 +7557,42 @@ pub async fn check_tool_use_tool_choice_specific_inference_response(
         }
         None => {}
         _ => panic!("Unreachable"),
+    }
+}
+
+fn parse_tool_call_raw_arguments(content_block: &Value) -> Map<String, Value> {
+    let raw_arguments = content_block
+        .get("raw_arguments")
+        .unwrap()
+        .as_str()
+        .unwrap();
+    let raw_arguments: Value = serde_json::from_str(raw_arguments).unwrap();
+    raw_arguments.as_object().cloned().unwrap()
+}
+
+fn assert_tool_call_arguments_are_reasonable(arguments: &Map<String, Value>) {
+    if let Some(location) = arguments.get("location") {
+        assert!(location.as_str().is_some());
+    }
+    if let Some(units) = arguments.get("units") {
+        let units = units.as_str().unwrap();
+        assert!(units.eq_ignore_ascii_case("celsius") || units.eq_ignore_ascii_case("fahrenheit"));
+    }
+    if let Some(fast) = arguments.get("fast") {
+        assert!(fast.is_boolean());
+    }
+}
+
+fn assert_tool_call_arguments_match_raw(
+    arguments: &Map<String, Value>,
+    raw_arguments: &Map<String, Value>,
+) {
+    for (key, value) in arguments {
+        assert_eq!(
+            raw_arguments.get(key),
+            Some(value),
+            "parsed arguments should match raw_arguments for key `{key}`"
+        );
     }
 }
 

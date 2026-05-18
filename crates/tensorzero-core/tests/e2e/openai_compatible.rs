@@ -908,7 +908,7 @@ async fn test_openai_compatible_streaming_tool_call() {
 }
 
 #[gtest]
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_openai_compatible_warn_unknown_fields() {
     let logs_contain = tensorzero_core::utils::testing::capture_logs();
     let client = tensorzero::test_helpers::make_embedded_gateway_no_config().await;
