@@ -77,7 +77,7 @@ where
 }
 
 #[cfg(all(test, feature = "e2e_tests"))]
-#[expect(clippy::print_stdout)]
+#[expect(clippy::print_stdout, clippy::unwrap_used)]
 mod tests {
     use crate::{LogFormat, enter_fake_http_request_otel, setup_observability};
     use gag::BufferRedirect;
