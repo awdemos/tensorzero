@@ -38,6 +38,7 @@
 
 pub mod genai_conventions;
 pub mod internal_metrics;
+pub mod openinference_conventions;
 pub mod request_logging;
 
 pub use tensorzero_otel::*;
