@@ -100,8 +100,8 @@ pub const TENSORZERO_DEFAULTS: ObservabilitySettings = ObservabilitySettings {
     service_name: "tensorzero-gateway",
     tracer_name: "tensorzero",
     overhead_metric_name: "tensorzero_inference_latency_overhead_seconds",
-    default_log_directives: "warn,gateway=info,tensorzero_core=info",
-    debug_log_directives: "warn,gateway=debug,tensorzero_core=debug",
+    default_log_directives: "warn,gateway=info,tensorzero_core=info,tensorzero_otel=info",
+    debug_log_directives: "warn,gateway=debug,tensorzero_core=debug,tensorzero_otel=debug",
     register_overhead_layer: true,
 };
 
