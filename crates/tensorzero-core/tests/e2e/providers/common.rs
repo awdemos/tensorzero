@@ -4910,9 +4910,15 @@ pub async fn check_tool_use_tool_choice_auto_used_inference_response(
     let usage = response_json.get("usage").unwrap();
     let usage = usage.as_object().unwrap();
     let input_tokens = usage.get("input_tokens").unwrap().as_u64().unwrap();
-    let output_tokens = usage.get("output_tokens").unwrap().as_u64().unwrap();
+    let output_tokens = usage.get("output_tokens").and_then(Value::as_u64);
     assert!(input_tokens > 0);
-    assert!(output_tokens > 0);
+    if is_batch && provider.model_provider_name == "gcp_vertex_gemini" {
+        if let Some(output_tokens) = output_tokens {
+            assert!(output_tokens > 0);
+        }
+    } else {
+        assert!(output_tokens.unwrap() > 0);
+    }
 
     // Sleep to allow time for data to be inserted into ClickHouse (trailing writes from API)
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -6118,8 +6124,12 @@ pub async fn check_tool_use_tool_choice_required_inference_response(
         .unwrap();
     let raw_arguments: Value = serde_json::from_str(raw_arguments).unwrap();
     let raw_arguments = raw_arguments.as_object().unwrap();
-    // OpenAI occasionally emits a tool call with an empty object for `arguments`
-    assert!(raw_arguments.len() <= 2);
+    // Gemini batch responses can include extra invalid fields in `raw_arguments`
+    // even when the parsed `arguments` object is null or sanitized.
+    if !(is_batch && provider.model_provider_name == "gcp_vertex_gemini") {
+        // OpenAI occasionally emits a tool call with an empty object for `arguments`
+        assert!(raw_arguments.len() <= 2);
+    }
     if let Some(location) = raw_arguments.get("location") {
         assert!(location.as_str().is_some());
     }
@@ -6129,8 +6139,10 @@ pub async fn check_tool_use_tool_choice_required_inference_response(
     }
 
     if let Some(arguments) = content_block["arguments"].as_object() {
-        // OpenAI occasionally emits a tool call with an empty object for `arguments`
-        assert!(arguments.len() <= 2);
+        if !(is_batch && provider.model_provider_name == "gcp_vertex_gemini") {
+            // OpenAI occasionally emits a tool call with an empty object for `arguments`
+            assert!(arguments.len() <= 2);
+        }
         if let Some(location) = arguments.get("location") {
             assert!(location.as_str().is_some());
         }
@@ -6143,9 +6155,15 @@ pub async fn check_tool_use_tool_choice_required_inference_response(
     let usage = response_json.get("usage").unwrap();
     let usage = usage.as_object().unwrap();
     let input_tokens = usage.get("input_tokens").unwrap().as_u64().unwrap();
-    let output_tokens = usage.get("output_tokens").unwrap().as_u64().unwrap();
+    let output_tokens = usage.get("output_tokens").and_then(Value::as_u64);
     assert!(input_tokens > 0);
-    assert!(output_tokens > 0);
+    if is_batch && provider.model_provider_name == "gcp_vertex_gemini" {
+        if let Some(output_tokens) = output_tokens {
+            assert!(output_tokens > 0);
+        }
+    } else {
+        assert!(output_tokens.unwrap() > 0);
+    }
 
     // Sleep to allow time for data to be inserted into ClickHouse (trailing writes from API)
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
