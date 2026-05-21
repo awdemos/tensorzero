@@ -11054,6 +11054,7 @@ pub async fn check_json_mode_inference_response(
     assert_eq!(retrieved_output_schema, expected_output_schema);
 
     // Check the ModelInference Table
+    let clickhouse = get_clickhouse().await;
     let result = select_model_inference_clickhouse(&clickhouse, inference_id)
         .await
         .unwrap();
