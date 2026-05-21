@@ -2909,6 +2909,7 @@ pub async fn check_base64_pdf_response(
     assert_eq!(input, correct_input);
 
     // Check the ModelInference Table
+    let clickhouse = get_clickhouse().await;
     let result = select_model_inference_clickhouse(&clickhouse, inference_id)
         .await
         .unwrap();
