@@ -876,9 +876,13 @@ mod tests {
     };
     use futures::StreamExt;
     use reqwest::Proxy;
+    use std::borrow::Cow;
     use tokio::task::{JoinHandle, JoinSet};
 
-    use crate::{CONCURRENCY_LIMIT, LimitedClient, TensorZeroEventSource};
+    use crate::{
+        CONCURRENCY_LIMIT, DEFAULT_HTTP_CLIENT_TIMEOUT, DEFAULT_PROXY_ENV_VAR, LimitedClient,
+        TensorZeroEventSource, TensorzeroHttpClient,
+    };
 
     async fn start_target_server() -> (SocketAddr, JoinHandle<Result<(), std::io::Error>>) {
         let app = Router::new()
@@ -1221,16 +1225,13 @@ mod tests {
     /// through this constructor.
     #[tokio::test]
     async fn test_new_with_extra_root_certs_constructs() {
-        use crate::DEFAULT_HTTP_CLIENT_TIMEOUT;
-        use std::borrow::Cow;
-
         // Empty case — current production callers will pass this shape via
         // the unchanged `new_with_proxy_env_var` constructor, but we want
         // the new entry point to accept it too.
-        let client = super::TensorzeroHttpClient::new_with_extra_root_certs(
+        let client = TensorzeroHttpClient::new_with_extra_root_certs(
             DEFAULT_HTTP_CLIENT_TIMEOUT,
             None,
-            Cow::Borrowed(super::DEFAULT_PROXY_ENV_VAR),
+            Cow::Borrowed(DEFAULT_PROXY_ENV_VAR),
             Vec::new(),
         );
         assert!(
@@ -1277,10 +1278,10 @@ emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
 -----END CERTIFICATE-----";
         let cert = reqwest::Certificate::from_pem(ISRG_ROOT_X1)
             .expect("parse test PEM cert (ISRG Root X1)");
-        let client = super::TensorzeroHttpClient::new_with_extra_root_certs(
+        let client = TensorzeroHttpClient::new_with_extra_root_certs(
             DEFAULT_HTTP_CLIENT_TIMEOUT,
             None,
-            Cow::Borrowed(super::DEFAULT_PROXY_ENV_VAR),
+            Cow::Borrowed(DEFAULT_PROXY_ENV_VAR),
             vec![cert],
         );
         assert!(
