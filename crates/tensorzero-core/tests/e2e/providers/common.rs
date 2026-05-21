@@ -83,6 +83,20 @@ impl E2ETestProvider {
     }
 }
 
+async fn wait_for_json_inference_clickhouse(inference_id: Uuid) -> Value {
+    let clickhouse = get_clickhouse().await;
+    for attempt in 0..10 {
+        if let Some(result) = select_json_inference_clickhouse(&clickhouse, inference_id).await {
+            return result;
+        }
+        if attempt < 9 {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+    }
+
+    panic!("Timed out waiting for JsonInference row in ClickHouse for {inference_id}");
+}
+
 #[derive(Clone, Debug)]
 pub struct ModelTestProvider {
     pub provider_type: String,
@@ -10974,14 +10988,8 @@ pub async fn check_json_mode_inference_response(
     let output_tokens = usage.get("output_tokens").unwrap().as_u64().unwrap();
     assert!(output_tokens > 0);
 
-    // Sleep to allow time for data to be inserted into ClickHouse (trailing writes from API)
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-    // Check if ClickHouse is ok - JsonInference Table
-    let clickhouse = get_clickhouse().await;
-    let result = select_json_inference_clickhouse(&clickhouse, inference_id)
-        .await
-        .unwrap();
+    // ClickHouse trailing writes can briefly lag the API response in CI.
+    let result = wait_for_json_inference_clickhouse(inference_id).await;
 
     println!("ClickHouse - JsonInference: {result:#?}");
 

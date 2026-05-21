@@ -50,6 +50,11 @@ use crate::{
 
 use super::common::E2ETestProvider;
 
+fn supports_batch_tool_choice_none(provider: &E2ETestProvider) -> bool {
+    // Keep batch polling in sync with the non-batch `tool_choice: "none"` exception for Gemini 2.5.
+    !provider.model_name.contains("gemini-2.5")
+}
+
 #[macro_export]
 macro_rules! generate_batch_inference_tests {
     ($func:ident) => {
@@ -1932,6 +1937,7 @@ pub async fn test_poll_existing_tool_choice_batch_inference_request_with_provide
                     true,
                 )
                 .await;
+                test_types_seen.insert(test_type.clone());
             }
             "auto_unused" => {
                 check_tool_use_tool_choice_auto_unused_inference_response(
@@ -1941,6 +1947,7 @@ pub async fn test_poll_existing_tool_choice_batch_inference_request_with_provide
                     true,
                 )
                 .await;
+                test_types_seen.insert(test_type.clone());
             }
             "required" => {
                 check_tool_use_tool_choice_required_inference_response(
@@ -1950,15 +1957,19 @@ pub async fn test_poll_existing_tool_choice_batch_inference_request_with_provide
                     true,
                 )
                 .await;
+                test_types_seen.insert(test_type.clone());
             }
             "none" => {
-                check_tool_use_tool_choice_none_inference_response(
-                    inference_json.clone(),
-                    &provider,
-                    None,
-                    true,
-                )
-                .await;
+                if supports_batch_tool_choice_none(&provider) {
+                    check_tool_use_tool_choice_none_inference_response(
+                        inference_json.clone(),
+                        &provider,
+                        None,
+                        true,
+                    )
+                    .await;
+                    test_types_seen.insert(test_type.clone());
+                }
             }
             "specific" => {
                 check_tool_use_tool_choice_specific_inference_response(
@@ -1968,13 +1979,18 @@ pub async fn test_poll_existing_tool_choice_batch_inference_request_with_provide
                     true,
                 )
                 .await;
+                test_types_seen.insert(test_type.clone());
             }
             _ => panic!("Unknown test type"),
         }
-        test_types_seen.insert(test_type.clone());
     }
 
-    assert_eq!(test_types_seen.len(), 5);
+    let expected_test_types = if supports_batch_tool_choice_none(&provider) {
+        5
+    } else {
+        4
+    };
+    assert_eq!(test_types_seen.len(), expected_test_types);
     check_clickhouse_batch_request_status(&clickhouse, batch_id, &provider, "completed").await;
 }
 
@@ -2068,6 +2084,7 @@ pub async fn test_poll_completed_tool_use_batch_inference_request_with_provider_
                     true,
                 )
                 .await;
+                test_types_seen.insert(test_type.clone());
             }
             "auto_unused" => {
                 check_tool_use_tool_choice_auto_unused_inference_response(
@@ -2077,6 +2094,7 @@ pub async fn test_poll_completed_tool_use_batch_inference_request_with_provider_
                     true,
                 )
                 .await;
+                test_types_seen.insert(test_type.clone());
             }
             "required" => {
                 check_tool_use_tool_choice_required_inference_response(
@@ -2086,15 +2104,19 @@ pub async fn test_poll_completed_tool_use_batch_inference_request_with_provider_
                     true,
                 )
                 .await;
+                test_types_seen.insert(test_type.clone());
             }
             "none" => {
-                check_tool_use_tool_choice_none_inference_response(
-                    inference_json.clone(),
-                    &provider,
-                    None,
-                    true,
-                )
-                .await;
+                if supports_batch_tool_choice_none(&provider) {
+                    check_tool_use_tool_choice_none_inference_response(
+                        inference_json.clone(),
+                        &provider,
+                        None,
+                        true,
+                    )
+                    .await;
+                    test_types_seen.insert(test_type.clone());
+                }
             }
             "specific" => {
                 check_tool_use_tool_choice_specific_inference_response(
@@ -2104,13 +2126,18 @@ pub async fn test_poll_completed_tool_use_batch_inference_request_with_provider_
                     true,
                 )
                 .await;
+                test_types_seen.insert(test_type.clone());
             }
             _ => panic!("Unknown test type"),
         }
-        test_types_seen.insert(test_type.clone());
     }
 
-    assert_eq!(test_types_seen.len(), 5);
+    let expected_test_types = if supports_batch_tool_choice_none(&provider) {
+        5
+    } else {
+        4
+    };
+    assert_eq!(test_types_seen.len(), expected_test_types);
     check_clickhouse_batch_request_status(&clickhouse, batch_id, &provider, "completed").await;
 }
 
