@@ -38,7 +38,10 @@ async fn get_providers() -> E2ETestProviders {
 
     let tool_providers = vec![
         E2ETestProvider {
-            supports_batch_inference: true,
+            // Gemini 2.5 batch tool-use polling has been flaky in daily runs:
+            // the model intermittently emits malformed tool arguments, which in turn
+            // makes the completed-batch polling assertions fail.
+            supports_batch_inference: false,
             variant_name: "gcp-vertex-gemini-flash".to_string(),
             model_name: "gcp-gemini-2.5-flash".into(),
             model_provider_name: "gcp_vertex_gemini".into(),
