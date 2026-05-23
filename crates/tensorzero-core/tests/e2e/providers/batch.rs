@@ -50,6 +50,12 @@ use crate::{
 
 use super::common::E2ETestProvider;
 
+// Gemini 2.5 batch responses can still return empty content for `tool_choice: none`,
+// matching the non-batch behavior already tracked in issue #2329.
+fn skip_tool_choice_none_batch_validation(provider: &E2ETestProvider) -> bool {
+    provider.model_name.contains("gemini-2.5")
+}
+
 #[macro_export]
 macro_rules! generate_batch_inference_tests {
     ($func:ident) => {
@@ -1951,6 +1957,7 @@ pub async fn test_poll_existing_tool_choice_batch_inference_request_with_provide
                 )
                 .await;
             }
+            "none" if skip_tool_choice_none_batch_validation(&provider) => {}
             "none" => {
                 check_tool_use_tool_choice_none_inference_response(
                     inference_json.clone(),
@@ -2087,6 +2094,7 @@ pub async fn test_poll_completed_tool_use_batch_inference_request_with_provider_
                 )
                 .await;
             }
+            "none" if skip_tool_choice_none_batch_validation(&provider) => {}
             "none" => {
                 check_tool_use_tool_choice_none_inference_response(
                     inference_json.clone(),
