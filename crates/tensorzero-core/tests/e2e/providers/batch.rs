@@ -50,6 +50,17 @@ use crate::{
 
 use super::common::E2ETestProvider;
 
+fn provider_supports_specific_tool_choice(provider: &E2ETestProvider) -> bool {
+    // Keep batch tool-choice coverage aligned with the single-inference helpers in
+    // `common.rs`: these providers don't honor `ToolChoice::Specific` strictly enough
+    // for the shared `weather_helper` fixtures to be stable.
+    !(provider.model_provider_name.contains("gcp_vertex")
+        || provider.model_provider_name == "groq"
+        || provider.model_provider_name == "mistral"
+        || provider.model_provider_name == "together"
+        || provider.model_provider_name == "fireworks")
+}
+
 #[macro_export]
 macro_rules! generate_batch_inference_tests {
     ($func:ident) => {
@@ -1343,6 +1354,9 @@ pub async fn test_poll_completed_inference_params_batch_inference_request_with_p
 /// Each element is a different test case from the e2e test suite for the synchronous API.
 pub async fn test_tool_use_batch_inference_request_with_provider(provider: E2ETestProvider) {
     skip_for_postgres!();
+    if !provider_supports_specific_tool_choice(&provider) {
+        return;
+    }
     let mut episode_ids = Vec::new();
     for _ in 0..5 {
         episode_ids.push(Uuid::now_v7());
@@ -1870,6 +1884,9 @@ pub async fn test_poll_existing_tool_choice_batch_inference_request_with_provide
     provider: E2ETestProvider,
 ) {
     skip_for_postgres!();
+    if !provider_supports_specific_tool_choice(&provider) {
+        return;
+    }
     let clickhouse = get_clickhouse().await;
     let function_name = "weather_helper";
     let latest_pending_batch_inference = get_latest_batch_inference(
@@ -1990,6 +2007,9 @@ pub async fn test_poll_completed_tool_use_batch_inference_request_with_provider(
     provider: E2ETestProvider,
 ) {
     skip_for_postgres!();
+    if !provider_supports_specific_tool_choice(&provider) {
+        return;
+    }
     let clickhouse = get_clickhouse().await;
     let function_name = "weather_helper";
     let latest_pending_batch_inference = insert_fake_pending_batch_inference_data(
@@ -2015,6 +2035,9 @@ pub async fn test_poll_completed_tool_use_batch_inference_request_with_provider_
     ids: InsertedFakeDataIds,
 ) {
     skip_for_postgres!();
+    if !provider_supports_specific_tool_choice(&provider) {
+        return;
+    }
     let clickhouse = get_clickhouse().await;
     let batch_id = ids.batch_id;
     let inference_tags = get_tags_for_batch_inferences(&clickhouse, batch_id)
