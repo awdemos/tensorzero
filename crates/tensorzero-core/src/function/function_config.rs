@@ -692,18 +692,9 @@ impl FunctionConfig {
                 //
                 // If the raw output is None, parsed output is also None.
                 // If the raw output is not a valid JSON string, log an error and set parsed output to None.
-                let parsed_output: Option<Value> = raw_output.as_ref().and_then(|raw_output| {
-                    serde_json::from_str::<Value>(raw_output)
-                        .map_err(|e| {
-                            Error::new(ErrorDetails::OutputParsing {
-                                message: format!(
-                                    "Failed to parse output from JSON function response {e}",
-                                ),
-                                raw_output: raw_output.to_string(),
-                            })
-                        })
-                        .ok()
-                });
+                let parsed_output: Option<Value> = raw_output
+                    .as_ref()
+                    .and_then(|raw_output| parse_json_function_output(raw_output).ok());
 
                 let output_schema: &JSONSchema = match &inference_config.dynamic_output_schema {
                     Some(schema) => schema,
@@ -866,6 +857,31 @@ fn get_json_output_from_content_blocks(
         None => None,
     };
     (raw_output, content_blocks, json_block_index)
+}
+
+fn parse_json_function_output(raw_output: &str) -> Result<Value, Error> {
+    serde_json::from_str::<Value>(raw_output)
+        .or_else(|original_error| {
+            let Some(stripped_output) = strip_markdown_code_fence(raw_output) else {
+                return Err(original_error);
+            };
+            serde_json::from_str::<Value>(stripped_output)
+        })
+        .map_err(|e| {
+            Error::new(ErrorDetails::OutputParsing {
+                message: format!("Failed to parse output from JSON function response {e}",),
+                raw_output: raw_output.to_string(),
+            })
+        })
+}
+
+fn strip_markdown_code_fence(raw_output: &str) -> Option<&str> {
+    let trimmed_output = raw_output.trim();
+    let fenced_output = trimmed_output.strip_prefix("```")?;
+    let first_newline_index = fenced_output.find('\n')?;
+    let (_, body_with_closing_fence) = fenced_output.split_at(first_newline_index + 1);
+    let body_without_closing_fence = body_with_closing_fence.strip_suffix("```")?;
+    Some(body_without_closing_fence.trim())
 }
 
 /// Validate all input messages that contain text (not raw_text).
@@ -2172,6 +2188,71 @@ mod tests {
                 assert_eq!(
                     result.output.raw,
                     Some("{\"name\": \"Jerry\", \"age\": 30}".to_string())
+                );
+                assert_eq!(result.model_inference_results, vec![model_response]);
+            }
+            InferenceResult::Chat(_) => panic!("Expected a JSON inference result"),
+        }
+
+        // Test with a fenced JSON content block
+        let inference_id = Uuid::now_v7();
+        let content_blocks = vec![
+            r#"```json
+{"name": "Jerry", "age": 30}
+```"#
+                .to_string()
+                .into(),
+        ];
+        let usage = Usage {
+            input_tokens: Some(10),
+            output_tokens: Some(10),
+            provider_cache_read_input_tokens: None,
+            provider_cache_write_input_tokens: None,
+            cost: None,
+        };
+        let latency = Latency::NonStreaming {
+            response_time: Duration::from_millis(100),
+        };
+        let model_response = ModelInferenceResponseWithMetadata {
+            id: Uuid::now_v7(),
+            system: None,
+            input_messages: RequestMessagesOrBatch::Message(vec![]),
+            output: content_blocks.clone(),
+            raw_request: raw_request.clone(),
+            raw_response: "content".to_string(),
+            usage,
+            model_provider_name: "model_provider_name".into(),
+            provider_type: Arc::from("dummy"),
+            model_name: "model_name".into(),
+            finish_reason: Some(FinishReason::ToolCall),
+            latency,
+            cached: false,
+            raw_usage: None,
+            relay_raw_response: None,
+            failed_raw_response: vec![],
+        };
+        let response = function_config
+            .prepare_response(
+                inference_id,
+                content_blocks,
+                vec![model_response.clone()],
+                &inference_config,
+                InferenceParams::default(),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.usage_considering_cached(), usage);
+        match response {
+            InferenceResult::Json(result) => {
+                assert_eq!(result.inference_id, inference_id);
+                assert_eq!(
+                    result.output.parsed.unwrap(),
+                    json!({"name": "Jerry", "age": 30}),
+                );
+                assert_eq!(
+                    result.output.raw,
+                    Some("```json\n{\"name\": \"Jerry\", \"age\": 30}\n```".to_string())
                 );
                 assert_eq!(result.model_inference_results, vec![model_response]);
             }
