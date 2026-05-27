@@ -6776,9 +6776,25 @@ pub async fn check_tool_use_tool_choice_none_inference_response(
     let usage = response_json.get("usage").unwrap();
     let usage = usage.as_object().unwrap();
     let input_tokens = usage.get("input_tokens").unwrap().as_u64().unwrap();
-    let output_tokens = usage.get("output_tokens").unwrap().as_u64().unwrap();
     assert!(input_tokens > 0);
-    assert!(output_tokens > 0);
+    match usage.get("output_tokens").and_then(Value::as_u64) {
+        Some(output_tokens) => assert!(output_tokens > 0),
+        None => {
+            assert!(
+                is_batch,
+                "non-batch responses should include output_tokens: {response_json:#?}"
+            );
+            assert!(
+                content.is_empty(),
+                "batch responses without output_tokens should not emit content: {response_json:#?}"
+            );
+            assert_eq!(
+                response_json.get("finish_reason").and_then(Value::as_str),
+                Some("unknown"),
+                "batch responses without output_tokens should use an unknown finish reason: {response_json:#?}"
+            );
+        }
+    }
 
     // Sleep to allow time for data to be inserted into ClickHouse (trailing writes from API)
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
