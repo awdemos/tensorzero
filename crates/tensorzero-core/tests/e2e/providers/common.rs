@@ -6776,9 +6776,15 @@ pub async fn check_tool_use_tool_choice_none_inference_response(
     let usage = response_json.get("usage").unwrap();
     let usage = usage.as_object().unwrap();
     let input_tokens = usage.get("input_tokens").unwrap().as_u64().unwrap();
-    let output_tokens = usage.get("output_tokens").unwrap().as_u64().unwrap();
+    let output_tokens = usage.get("output_tokens").and_then(Value::as_u64);
     assert!(input_tokens > 0);
-    assert!(output_tokens > 0);
+    if provider.model_provider_name == "gcp_vertex_gemini" && content.is_empty() {
+        // Gemini 2.5 can reject `tool_choice: none` with an `UNEXPECTED_TOOL_CALL`-style
+        // finish reason. In batch mode that surfaces as empty content with no output tokens.
+        assert_eq!(output_tokens, None);
+    } else {
+        assert!(output_tokens.is_some_and(|tokens| tokens > 0));
+    }
 
     // Sleep to allow time for data to be inserted into ClickHouse (trailing writes from API)
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -6905,8 +6911,12 @@ pub async fn check_tool_use_tool_choice_none_inference_response(
 
     let input_tokens = result.get("input_tokens").unwrap().as_u64().unwrap();
     assert!(input_tokens > 0);
-    let output_tokens = result.get("output_tokens").unwrap().as_u64().unwrap();
-    assert!(output_tokens > 0);
+    let output_tokens = result.get("output_tokens").and_then(Value::as_u64);
+    if provider.model_provider_name == "gcp_vertex_gemini" && content.is_empty() {
+        assert_eq!(output_tokens, None);
+    } else {
+        assert!(output_tokens.is_some_and(|tokens| tokens > 0));
+    }
     if !is_batch {
         let response_time_ms = result.get("response_time_ms").unwrap().as_u64().unwrap();
         assert!(response_time_ms > 0);

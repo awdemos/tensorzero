@@ -669,6 +669,11 @@ pub async fn test_start_simple_image_batch_inference_request_with_provider(
                     ]
                 },
             ]}],
+        "params": {
+            "chat_completion": {
+                "max_tokens": [500]
+            }
+        },
         "tags": [{"foo": "bar", "test_type": "batch_simple_image_v2", "variant_name": provider.variant_name}],
     });
 
@@ -789,6 +794,14 @@ pub async fn test_start_simple_image_batch_inference_request_with_provider(
     let inference_params = inference_params.get("chat_completion").unwrap();
     assert!(inference_params.get("temperature").is_none());
     assert!(inference_params.get("seed").is_none());
+    assert_eq!(
+        inference_params
+            .get("max_tokens")
+            .unwrap()
+            .as_u64()
+            .unwrap(),
+        500
+    );
 
     let model_name = result.get("model_name").unwrap().as_str().unwrap();
     assert_eq!(model_name, provider.model_name);
