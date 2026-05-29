@@ -30,6 +30,16 @@ async fn get_providers() -> E2ETestProviders {
         },
     ];
 
+    // Kimi on Azure is currently returning HTTP 500s for the cache-control path
+    // used by these tests, so keep prompt-cache coverage on the GPT-5 deployment.
+    let cache_input_token_providers = vec![E2ETestProvider {
+        supports_batch_inference: false,
+        variant_name: "azure".to_string(),
+        model_name: "gpt-5-mini-azure".into(),
+        model_provider_name: "azure".into(),
+        credentials: HashMap::new(),
+    }];
+
     let extra_body_providers = vec![
         E2ETestProvider {
             supports_batch_inference: false,
@@ -175,7 +185,7 @@ async fn get_providers() -> E2ETestProviders {
         bad_auth_extra_headers,
         reasoning_inference: vec![],
         reasoning_usage_inference: reasoning_providers,
-        cache_input_tokens_inference: standard_providers.clone(),
+        cache_input_tokens_inference: cache_input_token_providers,
         embeddings: embedding_providers,
         inference_params_inference: standard_providers.clone(),
         inference_params_dynamic_credentials: inference_params_dynamic_providers,
