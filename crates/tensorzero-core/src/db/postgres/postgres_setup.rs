@@ -341,11 +341,32 @@ async fn create_and_attach_partition_indexes(
         if already_indexed.contains(partition.as_str()) {
             continue;
         }
-        create_partition_index_concurrently(pool, table, column, partition).await?;
+        match create_partition_index_concurrently(pool, table, column, partition).await {
+            Ok(()) => {}
+            Err(error) if is_missing_partition_error(&error) => {
+                tracing::warn!(
+                    table,
+                    column,
+                    partition,
+                    error = %error,
+                    "Partition disappeared during trigram index setup; skipping"
+                );
+                continue;
+            }
+            Err(error) => return Err(error),
+        }
         attach_partition_index(pool, &parent_index, partition, column).await?;
     }
 
     Ok(())
+}
+
+fn is_missing_partition_error(error: &Error) -> bool {
+    let ErrorDetails::PostgresQuery { message } = error.get_details() else {
+        return false;
+    };
+
+    message.contains(" does not exist")
 }
 
 /// Creates a trigram index concurrently on a single partition.
