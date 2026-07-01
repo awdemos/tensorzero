@@ -954,8 +954,9 @@ impl ModelConfig {
 
                         // Perform the cache write outside of the `non_streaming_total_timeout` timeout future,
                         // (in case we ever add a blocking cache write option)
-                        if !response.cached && clients.cache_options.enabled.write() {
-                            let _ = start_cache_write(
+                        if !response.cached
+                            && clients.cache_options.enabled.write()
+                            && let Err(e) = start_cache_write(
                                 &clients.cache_manager,
                                 cache_key,
                                 CacheData {
@@ -974,7 +975,9 @@ impl ModelConfig {
                                         .clone()
                                         .map(std::borrow::Cow::into_owned),
                                 },
-                            );
+                            )
+                        {
+                            tracing::error!("Failed to start cache write: {e}");
                         }
 
                         // Collect raw response entries from failed providers for fallback reporting
@@ -1360,15 +1363,18 @@ fn wrap_provider_stream(
             }
         }.instrument(span_clone.clone()));
 
-        if write_to_cache && !errored {
-            let _ = start_cache_write_streaming(
+        if write_to_cache
+            && !errored
+            && let Err(e) = start_cache_write_streaming(
                 &cache_manager,
                 cache_key,
                 buffer,
                 &raw_request,
                 &aggregated_usage,
                 tool_config
-            );
+            )
+        {
+            tracing::error!("Failed to start streaming cache write: {e}");
         }
     }
     .instrument(span);

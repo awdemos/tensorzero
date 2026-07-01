@@ -256,9 +256,11 @@ impl TimeoutsConfig {
             && let Some(streaming_total_ms) = streaming_total_ms
             && streaming_total_ms < ttft_ms
         {
-            tracing::warn!(
-                "The `timeouts.streaming.total_ms` value `{streaming_total_ms}` is less than `timeouts.streaming.ttft_ms` value `{ttft_ms}`. The `total_ms` timeout may fire before the `ttft_ms` timeout."
-            );
+            return Err(Error::new(ErrorDetails::Config {
+                message: format!(
+                    "The `timeouts.streaming.total_ms` value `{streaming_total_ms}` is less than `timeouts.streaming.ttft_ms` value `{ttft_ms}`. The `total_ms` timeout may fire before the `ttft_ms` timeout."
+                ),
+            }));
         }
 
         Ok(())

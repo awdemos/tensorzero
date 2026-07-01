@@ -471,7 +471,8 @@ impl TensorzeroResponseWrapper {
     // These methods consume the `TensorzeroResponseWrapper`,
     // and drop the ticket. They do *not* give the caller ownership of `self.response`
     pub async fn text(self) -> Result<String, reqwest::Error> {
-        self.response.text().await
+        let bytes = self.response.bytes().await?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
 
     pub async fn json<T: DeserializeOwned>(self) -> Result<T, reqwest::Error> {

@@ -232,7 +232,7 @@ impl HTTPGateway {
         let raw_response = resp.text().await.map_err(|e| TensorZeroError::Other {
             source: Error::new(ErrorDetails::Serialization {
                 message: format!(
-                    "Error deserializing response: {}",
+                    "Error reading response body: {}",
                     DisplayOrDebug {
                         val: e,
                         debug: self.verbose_errors,
@@ -279,7 +279,7 @@ impl HTTPGateway {
                 {
                     return Err(TensorZeroError::Http {
                         status_code: code.as_u16(),
-                        text: resp.text().await.ok(),
+                        text: crate::providers::helpers::response_body_to_string_lossy(resp).await,
                         source: inner_err.into(),
                     });
                 }
@@ -310,7 +310,7 @@ impl HTTPGateway {
             if let reqwest_sse_stream::ReqwestSseStreamError::InvalidStatusCode(code, resp) = *e {
                 return Err(TensorZeroError::Http {
                     status_code: code.as_u16(),
-                    text: resp.text().await.ok(),
+                    text: crate::providers::helpers::response_body_to_string_lossy(resp).await,
                     source: inner_err.into(),
                 });
             }

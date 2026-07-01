@@ -2834,6 +2834,29 @@ async fn deny_bad_timeouts_non_streaming_field() {
 }
 
 #[tokio::test]
+async fn deny_streaming_total_ms_less_than_ttft_ms() {
+    let config = r#"
+        [models.slow_with_timeout]
+        routing = ["slow"]
+
+        [models.slow_with_timeout.providers.slow]
+        type = "dummy"
+        model_name = "good"
+        timeouts = { streaming = { ttft_ms = 5000, total_ms = 1000 } }
+        "#;
+    let config = toml::from_str(config).unwrap();
+
+    let err = Box::pin(Config::load_unwritten_config(ConfigInput::Fresh(config)))
+        .await
+        .expect_err("Config should fail to load");
+
+    assert_eq!(
+        err.to_string(),
+        "The `timeouts.streaming.total_ms` value `1000` is less than `timeouts.streaming.ttft_ms` value `5000`. The `total_ms` timeout may fire before the `ttft_ms` timeout."
+    );
+}
+
+#[tokio::test]
 async fn deny_user_schema_and_input_wrapper() {
     let temp_dir = tempfile::tempdir().unwrap();
     let config_str = r#"

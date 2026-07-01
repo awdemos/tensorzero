@@ -46,6 +46,21 @@ pub(crate) fn format_error_chain(err: &dyn std::error::Error) -> String {
     message
 }
 
+pub async fn response_body_to_string_lossy(resp: reqwest::Response) -> Option<String> {
+    match resp.bytes().await {
+        Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
+        Err(e) => {
+            tracing::warn!("Failed to read provider response body: {e}");
+            None
+        }
+    }
+}
+
+pub async fn response_body_to_string(resp: reqwest::Response) -> Result<String, reqwest::Error> {
+    let bytes = resp.bytes().await?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 pub async fn convert_stream_error(
     raw_request: String,
     provider_type: String,
@@ -61,7 +76,7 @@ pub async fn convert_stream_error(
     // wait on the parent `Span` to finish)
     match e {
         reqwest_sse_stream::ReqwestSseStreamError::InvalidStatusCode(status, resp) => {
-            let raw_response = resp.text().await.ok();
+            let raw_response = response_body_to_string_lossy(resp).await;
             let message = match (&raw_response, request_id) {
                 (Some(body), Some(id)) => format!("{base_message}: {body} [request_id: {id}]"),
                 (Some(body), None) => format!("{base_message}: {body}"),
@@ -79,7 +94,7 @@ pub async fn convert_stream_error(
             .into()
         }
         reqwest_sse_stream::ReqwestSseStreamError::InvalidContentType(_, resp) => {
-            let raw_response = resp.text().await.ok();
+            let raw_response = response_body_to_string_lossy(resp).await;
             let message = match (&raw_response, request_id) {
                 (Some(body), Some(id)) => format!("{base_message}: {body} [request_id: {id}]"),
                 (Some(body), None) => format!("{base_message}: {body}"),
@@ -456,7 +471,7 @@ pub async fn inject_extra_request_data_and_send_eventsource_with_headers(
             // Extract status code first (by borrowing), then consume Response to read body
             let (message, raw_response, status_code) = match e {
                 reqwest_sse_stream::ReqwestSseStreamError::InvalidStatusCode(status, resp) => {
-                    let body = resp.text().await.ok();
+                    let body = response_body_to_string_lossy(resp).await;
                     let message = match &body {
                         Some(b) => {
                             format!("Error sending request: InvalidStatusCode({status}): {b}")
@@ -469,7 +484,7 @@ pub async fn inject_extra_request_data_and_send_eventsource_with_headers(
                     content_type,
                     resp,
                 ) => {
-                    let body = resp.text().await.ok();
+                    let body = response_body_to_string_lossy(resp).await;
                     let message = match &body {
                         Some(b) => format!(
                             "Error sending request: InvalidContentType({}): {b}",

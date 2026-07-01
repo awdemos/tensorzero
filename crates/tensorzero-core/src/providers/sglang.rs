@@ -397,7 +397,7 @@ fn stream_sglang(
                     let message = e.to_string();
                     let mut raw_response = None;
                     if let reqwest_sse_stream::ReqwestSseStreamError::InvalidStatusCode(_, resp) = *e {
-                        raw_response = resp.text().await.ok();
+                        raw_response = crate::providers::helpers::response_body_to_string_lossy(resp).await;
                     }
                     yield Err(ErrorDetails::InferenceServer {
                         message,

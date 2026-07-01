@@ -364,7 +364,9 @@ async fn write_comment(
 
     if !dryrun {
         deferred_tasks.spawn(async move {
-            let _ = database.insert_comment_feedback(&insert).await;
+            if let Err(e) = database.insert_comment_feedback(&insert).await {
+                tracing::error!("Failed to write comment feedback to database: {e}");
+            }
         });
     }
     Ok(())
@@ -412,7 +414,9 @@ async fn write_demonstration(
 
     if !dryrun {
         deferred_tasks.spawn(async move {
-            let _ = database.insert_demonstration_feedback(&insert).await;
+            if let Err(e) = database.insert_demonstration_feedback(&insert).await {
+                tracing::error!("Failed to write demonstration feedback to database: {e}");
+            }
         });
     }
     Ok(())
@@ -462,7 +466,7 @@ async fn write_float(
 
     if !dryrun {
         deferred_tasks.spawn(async move {
-            let _ = try_join!(
+            if let Err(e) = try_join!(
                 write_static_evaluation_human_feedback_if_necessary(
                     database.as_ref(),
                     maybe_function_info,
@@ -473,7 +477,9 @@ async fn write_float(
                     target_id
                 ),
                 database.insert_float_feedback(&insert)
-            );
+            ) {
+                tracing::error!("Failed to write float feedback to database: {e}");
+            }
         });
     }
     Ok(())
@@ -522,7 +528,7 @@ async fn write_boolean(
 
     if !dryrun {
         deferred_tasks.spawn(async move {
-            let _ = try_join!(
+            if let Err(e) = try_join!(
                 write_static_evaluation_human_feedback_if_necessary(
                     database.as_ref(),
                     maybe_function_info,
@@ -533,7 +539,9 @@ async fn write_boolean(
                     target_id
                 ),
                 database.insert_boolean_feedback(&insert)
-            );
+            ) {
+                tracing::error!("Failed to write boolean feedback to database: {e}");
+            }
         });
     }
     Ok(())

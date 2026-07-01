@@ -1429,7 +1429,13 @@ fn create_stream(
                 let inference_response: Result<InferenceResult, Error> =
                     collect_chunks_future.await;
 
-                let inference_response = inference_response.ok();
+                let inference_response = match inference_response {
+                    Ok(response) => Some(response),
+                    Err(e) => {
+                        tracing::error!("Failed to collect streaming inference chunks for observability write: {e}");
+                        None
+                    }
+                };
 
                 if let Some(inference_response) = inference_response {
                     let mut inference_response = inference_response;
