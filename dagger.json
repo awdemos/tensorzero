@@ -1,0 +1,6 @@
+{
+  "name": "tensorzero",
+  "sdk": "go",
+  "source": "dagger",
+  "engineVersion": "v0.21.7"
+}
