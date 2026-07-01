@@ -1324,11 +1324,35 @@ impl ErrorDetails {
         match &self {
             ErrorDetails::AllRetriesFailed { .. } => false,
             ErrorDetails::RateLimitExceeded { .. } => false,
-            // For AllModelProvidersFailed we will retry if any provider error is retryable
+            ErrorDetails::AllVariantsFailed { .. } => false,
+            ErrorDetails::AllCandidatesFailed { .. } => false,
             ErrorDetails::AllModelProvidersFailed { provider_errors } => provider_errors
                 .iter()
                 .any(|(_, error)| error.is_retryable()),
-            _ => true,
+            ErrorDetails::StreamError { source, .. } => source.is_retryable(),
+            ErrorDetails::InferenceClient { status_code, .. } => {
+                status_code.is_none_or(|code| code.is_server_error())
+            }
+            ErrorDetails::InferenceServer { .. } => true,
+            ErrorDetails::FatalStreamError { .. } => true,
+            ErrorDetails::ClickHouseConnection { .. }
+            | ErrorDetails::ClickHouseQuery { .. }
+            | ErrorDetails::PostgresConnection { .. }
+            | ErrorDetails::PostgresQuery { .. }
+            | ErrorDetails::ValkeyConnection { .. }
+            | ErrorDetails::ValkeyQuery { .. }
+            | ErrorDetails::Cache { .. }
+            | ErrorDetails::ChannelWrite { .. }
+            | ErrorDetails::ObjectStoreWrite { .. }
+            | ErrorDetails::BadFileFetch { .. } => true,
+            ErrorDetails::InferenceTimeout { .. }
+            | ErrorDetails::VariantTimeout { .. }
+            | ErrorDetails::ModelTimeout { .. }
+            | ErrorDetails::ModelProviderTimeout { .. } => true,
+            ErrorDetails::Relay { status_code, .. } => {
+                status_code.is_none_or(|code| code.is_server_error())
+            }
+            _ => false,
         }
     }
 

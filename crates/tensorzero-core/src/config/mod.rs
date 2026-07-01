@@ -3210,6 +3210,67 @@ mod round_trip_tests {
         expect_that!(restored, eq(&original));
     }
 
+    #[gtest]
+    fn test_timeouts_config_rejects_non_streaming_total_above_global_http_timeout() {
+        let config = TimeoutsConfig {
+            non_streaming: Some(NonStreamingTimeouts {
+                total_ms: Some(2000),
+            }),
+            streaming: None,
+        };
+        expect_that!(
+            config.validate(&Duration::milliseconds(1000)),
+            err(anything())
+        );
+    }
+
+    #[gtest]
+    fn test_timeouts_config_rejects_streaming_ttft_above_global_http_timeout() {
+        let config = TimeoutsConfig {
+            non_streaming: None,
+            streaming: Some(StreamingTimeouts {
+                ttft_ms: Some(2000),
+                total_ms: None,
+            }),
+        };
+        expect_that!(
+            config.validate(&Duration::milliseconds(1000)),
+            err(anything())
+        );
+    }
+
+    #[gtest]
+    fn test_timeouts_config_rejects_streaming_total_above_global_http_timeout() {
+        let config = TimeoutsConfig {
+            non_streaming: None,
+            streaming: Some(StreamingTimeouts {
+                ttft_ms: None,
+                total_ms: Some(2000),
+            }),
+        };
+        expect_that!(
+            config.validate(&Duration::milliseconds(1000)),
+            err(anything())
+        );
+    }
+
+    #[gtest]
+    fn test_timeouts_config_accepts_timeouts_within_global_http_timeout() {
+        let config = TimeoutsConfig {
+            non_streaming: Some(NonStreamingTimeouts {
+                total_ms: Some(500),
+            }),
+            streaming: Some(StreamingTimeouts {
+                ttft_ms: Some(100),
+                total_ms: Some(1000),
+            }),
+        };
+        expect_that!(
+            config.validate(&Duration::milliseconds(1000)),
+            ok(anything())
+        );
+    }
+
     // ── MetricConfig ───────────────────────────────────────────────────
 
     #[gtest]

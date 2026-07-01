@@ -394,8 +394,7 @@ impl InferenceQueries for PostgresConnectionInfo {
         }
 
         if let Some(batch_sender) = self.batch_sender() {
-            batch_sender.send_chat_inferences(rows);
-            return Ok(());
+            return batch_sender.send_chat_inferences(rows);
         }
 
         let pool = self.get_pool_result().map_err(|e| e.log())?;
@@ -416,8 +415,7 @@ impl InferenceQueries for PostgresConnectionInfo {
         }
 
         if let Some(batch_sender) = self.batch_sender() {
-            batch_sender.send_json_inferences(rows);
-            return Ok(());
+            return batch_sender.send_json_inferences(rows);
         }
 
         let pool = self.get_pool_result().map_err(|e| e.log())?;

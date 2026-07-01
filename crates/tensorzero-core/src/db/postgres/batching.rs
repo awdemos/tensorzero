@@ -50,31 +50,34 @@ enum ChannelSender<T> {
 }
 
 impl<T> ChannelSender<T> {
-    /// Send a value, dropping it with an error log if the bounded channel is full.
-    fn send(&self, value: T, type_name: &str) {
+    /// Send a value, returning an error if the channel is full or closed.
+    fn send(&self, value: T, type_name: &str) -> Result<(), Error> {
         match self {
             ChannelSender::Bounded(tx) => match tx.try_send(value) {
-                Ok(()) => {}
+                Ok(()) => Ok(()),
                 Err(mpsc::error::TrySendError::Full(_)) => {
-                    tracing::error!(
-                        "Postgres batch channel full — dropping {type_name} record. \
-                         Increase `write_queue_capacity` or check Postgres performance."
-                    );
+                    Err(Error::new(ErrorDetails::ChannelWrite {
+                        message: format!(
+                            "Postgres batch channel full — cannot queue {type_name} record. \
+                             Increase `write_queue_capacity` or check Postgres performance."
+                        ),
+                    }))
                 }
                 Err(mpsc::error::TrySendError::Closed(_)) => {
-                    tracing::error!(
-                        "Postgres batch writer has shut down — dropping {type_name} record."
-                    );
+                    Err(Error::new(ErrorDetails::ChannelWrite {
+                        message: format!(
+                            "Postgres batch writer has shut down — cannot queue {type_name} record"
+                        ),
+                    }))
                 }
             },
-            ChannelSender::Unbounded(tx) => {
-                if let Err(e) = tx.send(value) {
-                    tracing::error!(
-                        "Postgres batch writer has shut down — dropping {type_name} record. \
-                         Error: {e}"
-                    );
-                }
-            }
+            ChannelSender::Unbounded(tx) => tx.send(value).map_err(|_| {
+                Error::new(ErrorDetails::ChannelWrite {
+                    message: format!(
+                        "Postgres batch writer has shut down — cannot queue {type_name} record"
+                    ),
+                })
+            }),
         }
     }
 }
@@ -134,22 +137,25 @@ impl PostgresBatchSender {
         })
     }
 
-    pub fn send_chat_inferences(&self, rows: &[ChatInferenceDatabaseInsert]) {
+    pub fn send_chat_inferences(&self, rows: &[ChatInferenceDatabaseInsert]) -> Result<(), Error> {
         for row in rows {
-            self.chat_inferences.send(row.clone(), "chat inference");
+            self.chat_inferences.send(row.clone(), "chat inference")?;
         }
+        Ok(())
     }
 
-    pub fn send_json_inferences(&self, rows: &[JsonInferenceDatabaseInsert]) {
+    pub fn send_json_inferences(&self, rows: &[JsonInferenceDatabaseInsert]) -> Result<(), Error> {
         for row in rows {
-            self.json_inferences.send(row.clone(), "json inference");
+            self.json_inferences.send(row.clone(), "json inference")?;
         }
+        Ok(())
     }
 
-    pub fn send_model_inferences(&self, rows: &[StoredModelInference]) {
+    pub fn send_model_inferences(&self, rows: &[StoredModelInference]) -> Result<(), Error> {
         for row in rows {
-            self.model_inferences.send(row.clone(), "model inference");
+            self.model_inferences.send(row.clone(), "model inference")?;
         }
+        Ok(())
     }
 }
 
@@ -158,6 +164,9 @@ struct PostgresBatchWriter {
     json_inferences_rx: ChannelReceiver<JsonInferenceDatabaseInsert>,
     model_inferences_rx: ChannelReceiver<StoredModelInference>,
 }
+
+const MAX_FLUSH_RETRIES: usize = 3;
+const FLUSH_RETRY_BASE_DELAY_MS: u64 = 100;
 
 /// Spawn a flush task that periodically drains `channel` and executes two insert queries
 /// (one for metadata, one for data) built from each batch.
@@ -183,26 +192,49 @@ fn spawn_flush_task<T: Send + 'static>(
             move |buffer| {
                 let pool = pool.clone();
                 async move {
-                    // TODO: if this errors, should we retry?
-                    match build_meta(&buffer) {
-                        Ok(mut qb) => {
-                            if let Err(e) = qb.build().execute(&pool).await {
-                                tracing::error!("{meta_err}: {e}");
+                    for attempt in 0..MAX_FLUSH_RETRIES {
+                        match build_meta(&buffer) {
+                            Ok(mut qb) => match qb.build().execute(&pool).await {
+                                Ok(_) => break,
+                                Err(e) if attempt + 1 < MAX_FLUSH_RETRIES => {
+                                    tracing::warn!("{meta_err} (attempt {}): {e}", attempt + 1);
+                                }
+                                Err(e) => {
+                                    tracing::error!("{meta_err}: {e}");
+                                    break;
+                                }
+                            },
+                            Err(e) => {
+                                tracing::error!("{meta_build_err}: {e}");
+                                break;
                             }
                         }
-                        Err(e) => {
-                            tracing::error!("{meta_build_err}: {e}");
-                        }
+                        tokio::time::sleep(Duration::from_millis(
+                            FLUSH_RETRY_BASE_DELAY_MS * (1 << attempt),
+                        ))
+                        .await;
                     }
-                    match build_data(&buffer) {
-                        Ok(mut qb) => {
-                            if let Err(e) = qb.build().execute(&pool).await {
-                                tracing::error!("{data_err}: {e}");
+                    for attempt in 0..MAX_FLUSH_RETRIES {
+                        match build_data(&buffer) {
+                            Ok(mut qb) => match qb.build().execute(&pool).await {
+                                Ok(_) => break,
+                                Err(e) if attempt + 1 < MAX_FLUSH_RETRIES => {
+                                    tracing::warn!("{data_err} (attempt {}): {e}", attempt + 1);
+                                }
+                                Err(e) => {
+                                    tracing::error!("{data_err}: {e}");
+                                    break;
+                                }
+                            },
+                            Err(e) => {
+                                tracing::error!("{data_build_err}: {e}");
+                                break;
                             }
                         }
-                        Err(e) => {
-                            tracing::error!("{data_build_err}: {e}");
-                        }
+                        tokio::time::sleep(Duration::from_millis(
+                            FLUSH_RETRY_BASE_DELAY_MS * (1 << attempt),
+                        ))
+                        .await;
                     }
                     buffer
                 }

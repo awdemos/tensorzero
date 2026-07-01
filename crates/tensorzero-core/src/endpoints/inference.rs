@@ -1389,13 +1389,6 @@ fn create_stream(
         yield Ok(prepare_response_chunk(&metadata, chunk));
 
         if !metadata.dryrun && config.gateway.observability.writes_enabled() {
-            // IMPORTANT: The following code will not be reached if the stream is interrupted.
-            // Only do things that would be ok to skip in that case.
-            //
-            // For example, if we were using ClickHouse for billing, we would want to store the interrupted requests.
-            //
-            // If we really care about storing interrupted requests, we should use a drop guard:
-            // https://github.com/tokio-rs/axum/discussions/1060
             let InferenceMetadata {
                 function_name,
                 variant_name,
@@ -1480,10 +1473,15 @@ fn create_stream(
                 drop(clickhouse_connection_info);
                 drop(postgres_connection_info);
             }.instrument(tracing::debug_span!(parent: &parent_span, "write_inference", otel.name = "write_inference", stream = true, inference_id = %inference_id, async_writes = async_writes));
-            if async_writes {
-                deferred_tasks.spawn(write_future);
-            } else {
-                write_future.await;
+            // Spawn the write onto the deferred task tracker unconditionally. If the stream is
+            // interrupted (e.g. client disconnect), the join handle is dropped but the spawned task
+            // keeps running and will be awaited during gateway shutdown, so observability writes are
+            // not silently lost. In the synchronous-write path we still await the task normally.
+            let write_handle = deferred_tasks.spawn(write_future);
+            if !async_writes
+                && let Err(e) = write_handle.await
+            {
+                tracing::error!("Failed to join inference write task: {e:?}");
             }
         }
     }

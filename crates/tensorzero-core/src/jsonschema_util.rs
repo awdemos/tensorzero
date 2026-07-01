@@ -191,7 +191,7 @@ impl JSONSchema {
                 message: e.to_string(),
             })
         })?;
-        Ok(Self::compile_background(schema))
+        Self::compile(schema)
     }
 }
 
@@ -367,6 +367,13 @@ mod tests {
 
         let instance = serde_json::json!({"name": "test"});
         assert!(schema.validate(&instance).await.is_ok());
+    }
+
+    #[test]
+    fn test_parse_from_str_invalid_schema() {
+        let schema_str = r#"{"type": "invalid_type"}"#;
+        let result = JSONSchema::parse_from_str(schema_str);
+        assert!(result.is_err());
     }
 
     #[tokio::test]

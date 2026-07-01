@@ -93,8 +93,7 @@ impl ModelInferenceQueries for PostgresConnectionInfo {
         }
 
         if let Some(batch_sender) = self.batch_sender() {
-            batch_sender.send_model_inferences(rows);
-            return Ok(());
+            return batch_sender.send_model_inferences(rows);
         }
 
         let pool = self.get_pool_result().map_err(|e| e.log())?;

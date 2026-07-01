@@ -13,6 +13,9 @@ use crate::db::batching::{ChannelReceiver, process_channel_with_capacity_and_tim
 use crate::db::clickhouse::{ClickHouseConnectionInfo, Rows, TableName};
 use crate::error::{DelayedError, Error, ErrorDetails};
 
+const MAX_FLUSH_RETRIES: usize = 3;
+const FLUSH_RETRY_BASE_DELAY_MS: u64 = 100;
+
 /// Wraps either a bounded or unbounded mpsc sender.
 #[derive(Debug)]
 enum ChannelSender {
@@ -122,24 +125,28 @@ impl BatchSender {
                 ChannelSender::Bounded(tx) => match tx.try_send(row) {
                     Ok(()) => {}
                     Err(mpsc::error::TrySendError::Full(_)) => {
-                        tracing::error!(
-                            table = ?table_name,
-                            "ClickHouse batch channel full — dropping row. \
-                             Increase `write_queue_capacity` or check ClickHouse performance."
-                        );
+                        return Err(Error::new(ErrorDetails::ChannelWrite {
+                            message: format!(
+                                "ClickHouse batch channel full for table {table_name:?} — cannot queue row. \
+                                 Increase `write_queue_capacity` or check ClickHouse performance."
+                            ),
+                        }));
                     }
                     Err(mpsc::error::TrySendError::Closed(_)) => {
-                        tracing::error!(
-                            table = ?table_name,
-                            "ClickHouse batch writer has shut down — dropping row."
-                        );
+                        return Err(Error::new(ErrorDetails::ChannelWrite {
+                            message: format!(
+                                "ClickHouse batch writer has shut down for table {table_name:?} — cannot queue row"
+                            ),
+                        }));
                     }
                 },
                 ChannelSender::Unbounded(tx) => {
                     if let Err(e) = tx.send(row) {
-                        tracing::error!(
-                            "Error sending row to batch channel: {e}. {IMPOSSIBLE_ERROR_MESSAGE}"
-                        );
+                        return Err(Error::new(ErrorDetails::ChannelWrite {
+                            message: format!(
+                                "ClickHouse batch writer has shut down for table {table_name:?}: {e}"
+                            ),
+                        }));
                     }
                 }
             }
@@ -169,13 +176,28 @@ impl BatchWriter {
             let flush = move |buffer: Vec<String>| {
                 let clickhouse = clickhouse.clone();
                 async move {
-                    if let Err(e) = clickhouse
-                        .write_non_batched::<()>(Rows::Serialized(&buffer), table_name)
-                        .await
-                    {
-                        // TODO: if this errors, should we retry?
-                        // Log the error (converting DelayedError to Error)
-                        e.log();
+                    for attempt in 0..MAX_FLUSH_RETRIES {
+                        match clickhouse
+                            .write_non_batched::<()>(Rows::Serialized(&buffer), table_name)
+                            .await
+                        {
+                            Ok(()) => break,
+                            Err(e) if attempt + 1 < MAX_FLUSH_RETRIES => {
+                                tracing::warn!(
+                                    "Error writing to ClickHouse table {table_name:?} (attempt {}): {e}",
+                                    attempt + 1
+                                );
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    "Error writing to ClickHouse table {table_name:?}: {e}"
+                                );
+                            }
+                        }
+                        tokio::time::sleep(Duration::from_millis(
+                            FLUSH_RETRY_BASE_DELAY_MS * (1 << attempt),
+                        ))
+                        .await;
                     }
                     buffer
                 }
