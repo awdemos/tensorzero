@@ -2,6 +2,9 @@
 
 # TensorZero
 
+> [!IMPORTANT]
+> This fork of TensorZero is under new management and is now developed independently of the upstream TensorZero project, which has discontinued development. This repository will continue to evolve on its own roadmap. The original docs, links, and branding below are historical and may not reflect this fork's current status.
+
 <p><picture><img src="https://www.tensorzero.com/github-trending-badge.svg" alt="GitHub Trending - #1 Repository Of The Day"></picture></p>
 
 **TensorZero is an open-source LLMOps platform that unifies:**
