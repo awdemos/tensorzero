@@ -74,3 +74,22 @@ We use `ts-rs` and `n-api` for TypeScript-Rust interoperability.
 
 - `CONTRIBUTING.md` has additional context on working on this codebase.
 - Prefer backticks (`) instead of ticks (') to wrap technical terms in comments, error messages, READMEs, etc.
+
+## Deployment
+
+This project has a Dagger module (`dagger.json` in `./`).
+From the repository root, run:
+
+```bash
+# list available functions
+dagger call --help -m ./
+```
+
+Common deployment functions:
+
+```bash
+# Build builds the TensorZero gateway container image.
+dagger call -m ./ build
+```
+
+You may need to export required tokens before calling deploy functions (e.g., `GH_TOKEN`, `CLOUDFLARE_API_TOKEN`, `REGISTRY_TOKEN`).
