@@ -252,7 +252,7 @@ pub async fn make_gcp_object_store(
                 // We didn't pass in any 'Extensions' when calling headers, so this should never happen
                 CacheableResource::NotModified => {
                     return Err(Error::new(ErrorDetails::InternalError {
-                        message: "GCP SDK return CacheableResource::NotModified. This should never happen. Please file a bug report at https://github.com/tensorzero/tensorzero/discussions/new?category=bug-reports.".to_string(),
+                        message: "GCP SDK return CacheableResource::NotModified. This should never happen. Please file a bug report at https://github.com/awdemos/tensorzero/discussions/new?category=bug-reports.".to_string(),
                     }))
                 }
             };
@@ -904,7 +904,7 @@ impl GCPVertexCredentials {
                     // We didn't pass in any 'Extensions' when calling headers, so this should never happen
                     CacheableResource::NotModified => {
                         return Err(DelayedError::new(ErrorDetails::InternalError {
-                            message: "GCP SDK return CacheableResource::NotModified. This should never happen. Please file a bug report at https://github.com/tensorzero/tensorzero/discussions/new?category=bug-reports.".to_string(),
+                            message: "GCP SDK return CacheableResource::NotModified. This should never happen. Please file a bug report at https://github.com/awdemos/tensorzero/discussions/new?category=bug-reports.".to_string(),
                         }))
                     }
                 }
@@ -2748,7 +2748,7 @@ fn content_part_to_tensorzero_chunk(
             let id = match last_tool_idx {
                 Some(idx) => idx.to_string(),
                 None => return Err(Error::new(ErrorDetails::Inference {
-                    message: "Tool call index is not set in GCP Vertex Gemini. This should never happen. Please file a bug report: https://github.com/tensorzero/tensorzero/discussions/categories/bug-reports".to_string(),
+                    message: "Tool call index is not set in GCP Vertex Gemini. This should never happen. Please file a bug report: https://github.com/awdemos/tensorzero/discussions/categories/bug-reports".to_string(),
                 })),
             };
             output.push(ContentBlockChunk::ToolCall(ToolCallChunk {

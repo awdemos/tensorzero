@@ -6,7 +6,7 @@
   "author": "TensorZero",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tensorzero/tensorzero.git"
+    "url": "git+https://github.com/awdemos/tensorzero.git"
   },
   "type": "module",
   "scripts": {

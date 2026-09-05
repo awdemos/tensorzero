@@ -9,6 +9,6 @@ Gem::Specification.new do |s|
   s.homepage    = 'https://www.tensorzero.com'
   s.license     = 'Apache-2.0'
   s.metadata    = {
-    "source_code_uri" => "https://github.com/tensorzero/tensorzero"
+    "source_code_uri" => "https://github.com/awdemos/tensorzero"
   }
 end
