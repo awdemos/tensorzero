@@ -334,7 +334,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                 Docs
               </FooterLink>
               <FooterLink
-                source="https://github.com/tensorzero/tensorzero"
+                source="https://github.com/awdemos/tensorzero"
                 icon={GitHub}
               >
                 GitHub

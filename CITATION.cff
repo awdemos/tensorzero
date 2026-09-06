@@ -6,7 +6,7 @@ authors:
   - name: TensorZero Team
     email: hello@tensorzero.com
     website: "https://www.tensorzero.com"
-repository-code: "https://github.com/tensorzero/tensorzero"
+repository-code: "https://github.com/awdemos/tensorzero"
 url: "https://www.tensorzero.com/"
 license: Apache-2.0
 identifiers:

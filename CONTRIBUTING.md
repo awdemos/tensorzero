@@ -30,7 +30,7 @@ For general questions, technical support, and conversations not directly related
 
 > [!TIP]
 >
-> See the [`good-first-issue`](https://github.com/tensorzero/tensorzero/issues?q=is%3Aopen+is%3Aissue+label%3Agood-first-issue) label for simpler issues that might be a good starting point for new contributors.
+> See the [`good-first-issue`](https://github.com/awdemos/tensorzero/issues?q=is%3Aopen+is%3Aissue+label%3Agood-first-issue) label for simpler issues that might be a good starting point for new contributors.
 
 ### Code
 

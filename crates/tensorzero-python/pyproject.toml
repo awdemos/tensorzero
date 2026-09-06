@@ -41,9 +41,9 @@ keywords = [
 [project.urls]
 Homepage = "https://tensorzero.com/"
 Documentation = "https://tensorzero.com/docs/"
-Repository = "https://github.com/tensorzero/tensorzero"
-Issues = "https://github.com/tensorzero/tensorzero/issues"
-ReleaseNotes = "https://github.com/tensorzero/tensorzero/releases"
+Repository = "https://github.com/awdemos/tensorzero"
+Issues = "https://github.com/awdemos/tensorzero/issues"
+ReleaseNotes = "https://github.com/awdemos/tensorzero/releases"
 
 [build-system]
 requires = ["maturin>=1.8,<2.0"]
