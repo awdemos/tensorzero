@@ -944,6 +944,13 @@ pub enum ErrorDetails {
         status_code: Option<u16>,
     },
 }
+
+/// Returns true for HTTP status codes where retrying the request may succeed:
+/// server errors (5xx) and rate limiting (`429 Too Many Requests`).
+fn is_retryable_status(code: StatusCode) -> bool {
+    code.is_server_error() || code == StatusCode::TOO_MANY_REQUESTS
+}
+
 impl ErrorDetails {
     /// Defines the error level for logging this error
     fn level(&self) -> tracing::Level {
@@ -1331,7 +1338,7 @@ impl ErrorDetails {
                 .any(|(_, error)| error.is_retryable()),
             ErrorDetails::StreamError { source, .. } => source.is_retryable(),
             ErrorDetails::InferenceClient { status_code, .. } => {
-                status_code.is_none_or(|code| code.is_server_error())
+                status_code.is_none_or(is_retryable_status)
             }
             ErrorDetails::InferenceServer { .. } => true,
             ErrorDetails::FatalStreamError { .. } => true,
@@ -1349,9 +1356,10 @@ impl ErrorDetails {
             | ErrorDetails::VariantTimeout { .. }
             | ErrorDetails::ModelTimeout { .. }
             | ErrorDetails::ModelProviderTimeout { .. } => true,
-            ErrorDetails::Relay { status_code, .. } => {
-                status_code.is_none_or(|code| code.is_server_error())
-            }
+            ErrorDetails::Relay { status_code, .. } => status_code.is_none_or(is_retryable_status),
+            // NB: `Autopilot` carries an `Option<u16>` status code (unlike `Relay`'s
+            // `Option<StatusCode>`) and is intentionally non-retryable, so it falls
+            // through to the catch-all below.
             _ => false,
         }
     }
@@ -2321,6 +2329,8 @@ impl From<tensorzero_types::TypeError> for Error {
 
 #[cfg(test)]
 mod tests {
+    use googletest::prelude::*;
+
     use super::*;
 
     #[test]
@@ -2682,5 +2692,69 @@ mod tests {
         let entries = entries.unwrap();
         assert_eq!(entries.len(), 1, "should have exactly one entry");
         assert_eq!(entries[0].data, "stream_error_data");
+    }
+
+    fn inference_client_retryable(status_code: Option<StatusCode>) -> bool {
+        ErrorDetails::InferenceClient {
+            message: "test".to_string(),
+            status_code,
+            provider_type: "openai".to_string(),
+            api_type: ApiType::ChatCompletions,
+            raw_request: None,
+            raw_response: None,
+        }
+        .is_retryable()
+    }
+
+    #[gtest]
+    fn test_is_retryable_inference_client_retries_429_and_5xx() {
+        // Providers map rate limiting to 429, which must be retried
+        expect_that!(
+            inference_client_retryable(Some(StatusCode::TOO_MANY_REQUESTS)),
+            eq(true)
+        );
+        expect_that!(
+            inference_client_retryable(Some(StatusCode::INTERNAL_SERVER_ERROR)),
+            eq(true)
+        );
+        expect_that!(inference_client_retryable(None), eq(true));
+    }
+
+    #[gtest]
+    fn test_is_retryable_inference_client_does_not_retry_other_4xx() {
+        expect_that!(
+            inference_client_retryable(Some(StatusCode::BAD_REQUEST)),
+            eq(false)
+        );
+        expect_that!(
+            inference_client_retryable(Some(StatusCode::UNAUTHORIZED)),
+            eq(false)
+        );
+    }
+
+    #[gtest]
+    fn test_is_retryable_relay_status_codes() {
+        let retryable = |status_code: Option<StatusCode>| {
+            ErrorDetails::Relay {
+                message: "test".to_string(),
+                raw_response: vec![],
+                raw_chunk: None,
+                status_code,
+            }
+            .is_retryable()
+        };
+        expect_that!(retryable(Some(StatusCode::TOO_MANY_REQUESTS)), eq(true));
+        expect_that!(retryable(Some(StatusCode::BAD_GATEWAY)), eq(true));
+        expect_that!(retryable(Some(StatusCode::BAD_REQUEST)), eq(false));
+        expect_that!(retryable(None), eq(true));
+    }
+
+    #[gtest]
+    fn test_is_retryable_autopilot_is_not_retryable() {
+        let details = ErrorDetails::Autopilot {
+            message: "test".to_string(),
+            status_code: Some(500),
+        };
+        expect_that!(details.is_retryable(), eq(false));
     }
 }

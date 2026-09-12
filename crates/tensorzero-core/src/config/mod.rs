@@ -1656,6 +1656,10 @@ impl Config {
             ConfigInput::Snapshot { .. } => true,
             ConfigInput::Fresh(_) | ConfigInput::Database { .. } => false,
         };
+        // Fresh TOML configs are validated strictly. Stored configs (loaded from the database
+        // or from historical snapshots) may have been written before the timeout validation
+        // existed, so for them timeout violations warn instead of failing to load.
+        let is_fresh_config = matches!(&input, ConfigInput::Fresh(_));
         let mut templates = TemplateConfig::new();
         let ProcessedConfigInput {
             tools,
@@ -1796,7 +1800,17 @@ impl Config {
         };
 
         // Validate the config (before adding tensorzero:: prefixed evaluator artifacts)
-        config.validate().await?;
+        if let Err(e) = config.validate().await {
+            // NB: `Config::validate` returns on the first error, so a stored config with
+            // invalid timeouts will not get the checks that run after the failing one.
+            if is_fresh_config || !is_timeout_validation_error(&e) {
+                return Err(e);
+            }
+            e.log_at_level(
+                "Stored config has timeouts that fail validation (loading anyway): ",
+                tracing::Level::WARN,
+            );
+        }
 
         // Register function-level evaluator functions and metrics after validation
         // (they use tensorzero:: prefix which validation would reject for user-defined items)
@@ -2152,6 +2166,15 @@ pub enum ConfigInput {
         snapshot: Box<ConfigSnapshot>,
         runtime_overlay: Box<RuntimeOverlay>,
     },
+}
+
+/// Returns true if the error was produced by `TimeoutsConfig::validate`.
+/// All messages produced there start with ``The `timeouts.``.
+fn is_timeout_validation_error(e: &Error) -> bool {
+    matches!(
+        e.get_details(),
+        ErrorDetails::Config { message } if message.starts_with("The `timeouts.")
+    )
 }
 
 #[cfg(feature = "pyo3")]
@@ -3222,7 +3245,9 @@ mod round_trip_tests {
         };
         expect_that!(
             config.validate(&Duration::milliseconds(1000)),
-            err(anything())
+            err(displays_as(contains_substring(
+                "timeouts.non_streaming.total_ms"
+            )))
         );
     }
 
@@ -3237,7 +3262,9 @@ mod round_trip_tests {
         };
         expect_that!(
             config.validate(&Duration::milliseconds(1000)),
-            err(anything())
+            err(displays_as(contains_substring(
+                "timeouts.streaming.ttft_ms"
+            )))
         );
     }
 
@@ -3252,7 +3279,41 @@ mod round_trip_tests {
         };
         expect_that!(
             config.validate(&Duration::milliseconds(1000)),
-            err(anything())
+            err(displays_as(contains_substring(
+                "timeouts.streaming.total_ms"
+            )))
+        );
+    }
+
+    #[gtest]
+    fn test_timeouts_config_rejects_streaming_total_below_ttft() {
+        let config = TimeoutsConfig {
+            non_streaming: None,
+            streaming: Some(StreamingTimeouts {
+                ttft_ms: Some(2000),
+                total_ms: Some(1000),
+            }),
+        };
+        expect_that!(
+            config.validate(&Duration::milliseconds(5000)),
+            err(displays_as(contains_substring(
+                "may fire before the `ttft_ms` timeout"
+            )))
+        );
+    }
+
+    #[gtest]
+    fn test_timeouts_config_accepts_streaming_total_equal_to_ttft() {
+        let config = TimeoutsConfig {
+            non_streaming: None,
+            streaming: Some(StreamingTimeouts {
+                ttft_ms: Some(1000),
+                total_ms: Some(1000),
+            }),
+        };
+        expect_that!(
+            config.validate(&Duration::milliseconds(5000)),
+            ok(anything())
         );
     }
 

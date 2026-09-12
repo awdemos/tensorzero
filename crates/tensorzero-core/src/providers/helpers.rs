@@ -56,11 +56,6 @@ pub async fn response_body_to_string_lossy(resp: reqwest::Response) -> Option<St
     }
 }
 
-pub async fn response_body_to_string(resp: reqwest::Response) -> Result<String, reqwest::Error> {
-    let bytes = resp.bytes().await?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
-}
-
 pub async fn convert_stream_error(
     raw_request: String,
     provider_type: String,

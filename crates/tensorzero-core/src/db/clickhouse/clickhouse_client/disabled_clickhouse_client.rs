@@ -59,6 +59,7 @@ impl ClickHouseClient for DisabledClickHouseClient {
         &self,
         _rows: Vec<String>,
         _table: TableName,
+        _dedup_token: Option<String>,
     ) -> Result<(), DelayedError> {
         Ok(())
     }

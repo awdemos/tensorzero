@@ -1153,6 +1153,8 @@ pub async fn write_completed_batch_inference<'a>(
             .transpose()
         {
             Ok(s) => s,
+            // Skip this inference if the stored schema is invalid.
+            // The error is logged when the `Error` is constructed in `parse_from_str`.
             Err(_) => continue,
         };
         let extra_body = Default::default();

@@ -214,6 +214,7 @@ impl ClickHouseClient for ProductionClickHouseClient {
             Rows::<String>::Serialized(&rows),
             table,
             self.batch_sender.as_deref(),
+            None,
         )
         .await
     }
@@ -222,8 +223,16 @@ impl ClickHouseClient for ProductionClickHouseClient {
         &self,
         rows: Vec<String>,
         table: TableName,
+        dedup_token: Option<String>,
     ) -> Result<(), DelayedError> {
-        write_production(self, Rows::<String>::Serialized(&rows), table, None).await
+        write_production(
+            self,
+            Rows::<String>::Serialized(&rows),
+            table,
+            None,
+            dedup_token.as_deref(),
+        )
+        .await
     }
 
     async fn run_query_synchronous(
@@ -623,6 +632,7 @@ async fn write_production<T: Serialize + Send + Sync>(
     rows: Rows<'_, T>,
     table: TableName,
     batch: Option<&BatchSender>,
+    dedup_token: Option<&str>,
 ) -> Result<(), DelayedError> {
     let is_empty = match &rows {
         Rows::Unserialized(rows) => rows.is_empty(),
@@ -652,10 +662,19 @@ async fn write_production<T: Serialize + Send + Sync>(
     let rows_json = rows_json.join("\n");
     let table = table.as_str();
 
+    // `insert_deduplication_token` makes retried inserts of the same batch idempotent, and
+    // `async_insert_deduplicate=1` enables deduplication for async inserts (ClickHouse >= 23.10).
+    let dedup_settings = match dedup_token {
+        Some(token) => {
+            format!(", insert_deduplication_token='{token}', async_insert_deduplicate=1")
+        }
+        None => String::new(),
+    };
+
     // We can wait for the async insert since we're spawning a new tokio task to do the insert
     let query = format!(
         "INSERT INTO {table}\n\
-        SETTINGS async_insert=1, wait_for_async_insert=1\n\
+        SETTINGS async_insert=1, wait_for_async_insert=1{dedup_settings}\n\
         FORMAT JSONEachRow\n\
         {rows_json}"
     );

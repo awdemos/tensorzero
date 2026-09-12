@@ -365,7 +365,10 @@ async fn write_comment(
     if !dryrun {
         deferred_tasks.spawn(async move {
             if let Err(e) = database.insert_comment_feedback(&insert).await {
-                tracing::error!("Failed to write comment feedback to database: {e}");
+                e.log_at_level(
+                    "Failed to write comment feedback to database: ",
+                    tracing::Level::ERROR,
+                );
             }
         });
     }
@@ -415,7 +418,10 @@ async fn write_demonstration(
     if !dryrun {
         deferred_tasks.spawn(async move {
             if let Err(e) = database.insert_demonstration_feedback(&insert).await {
-                tracing::error!("Failed to write demonstration feedback to database: {e}");
+                e.log_at_level(
+                    "Failed to write demonstration feedback to database: ",
+                    tracing::Level::ERROR,
+                );
             }
         });
     }
@@ -478,7 +484,10 @@ async fn write_float(
                 ),
                 database.insert_float_feedback(&insert)
             ) {
-                tracing::error!("Failed to write float feedback to database: {e}");
+                e.log_at_level(
+                    "Failed to write float feedback to database: ",
+                    tracing::Level::ERROR,
+                );
             }
         });
     }
@@ -540,7 +549,10 @@ async fn write_boolean(
                 ),
                 database.insert_boolean_feedback(&insert)
             ) {
-                tracing::error!("Failed to write boolean feedback to database: {e}");
+                e.log_at_level(
+                    "Failed to write boolean feedback to database: ",
+                    tracing::Level::ERROR,
+                );
             }
         });
     }

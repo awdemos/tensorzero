@@ -61,6 +61,7 @@ pub trait ClickHouseClient: Send + Sync + Debug + HealthCheckable {
         &self,
         rows: Vec<String>,
         table: TableName,
+        dedup_token: Option<String>,
     ) -> Result<(), DelayedError>;
 
     /// Runs a query with parameters, waiting for mutations to complete
@@ -129,6 +130,7 @@ mock! {
             &self,
             rows: Vec<String>,
             table: TableName,
+            dedup_token: Option<String>,
         ) -> Result<(), DelayedError>;
         async fn run_query_synchronous<'a, 'b, 'c, 'd>(
             &'a self,

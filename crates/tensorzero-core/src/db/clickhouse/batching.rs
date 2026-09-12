@@ -40,8 +40,13 @@ fn create_channel_pair(capacity: Option<usize>) -> (ChannelSender, ChannelReceiv
 /// and submits them to ClickHouse on a schedule defined by a `BatchWritesConfig`.
 ///
 /// By default, channels are unbounded (no data is dropped). If `write_queue_capacity` is set,
-/// channels are bounded: when full, new rows are dropped and logged rather than buffering
-/// without limit.
+/// channels are bounded: when full, `add_to_batch` returns an error rather than buffering
+/// without limit (callers decide whether to fail the request or drop the row).
+///
+/// Failed flushes are retried with exponential backoff. Retries reuse a per-batch
+/// `insert_deduplication_token` so that ClickHouse deduplicates an insert whose response
+/// was lost after the server committed it (requires ClickHouse >= 23.10). Rows are dropped
+/// if all retries fail.
 ///
 /// When a `BatchSender` is dropped, it blocks until the batch writer finishes
 /// processing all outstanding batches.
@@ -176,22 +181,35 @@ impl BatchWriter {
             let flush = move |buffer: Vec<String>| {
                 let clickhouse = clickhouse.clone();
                 async move {
+                    // One token per buffered batch, reused across retries: if the insert
+                    // committed but its response was lost, ClickHouse deduplicates the retry.
+                    let dedup_token = uuid::Uuid::now_v7().simple().to_string();
                     for attempt in 0..MAX_FLUSH_RETRIES {
                         match clickhouse
-                            .write_non_batched::<()>(Rows::Serialized(&buffer), table_name)
+                            .write_non_batched_with_dedup_token::<()>(
+                                Rows::Serialized(&buffer),
+                                table_name,
+                                &dedup_token,
+                            )
                             .await
                         {
                             Ok(()) => break,
                             Err(e) if attempt + 1 < MAX_FLUSH_RETRIES => {
+                                // Consume the `DelayedError` without logging at ERROR,
+                                // since a later attempt may still succeed.
+                                let message = e.suppress_logging_of_error_message();
                                 tracing::warn!(
-                                    "Error writing to ClickHouse table {table_name:?} (attempt {}): {e}",
+                                    "Error writing to ClickHouse table {table_name:?} (attempt {}): {message}",
                                     attempt + 1
                                 );
                             }
                             Err(e) => {
-                                tracing::error!(
-                                    "Error writing to ClickHouse table {table_name:?}: {e}"
+                                e.log_at_level(
+                                    &format!("Error writing to ClickHouse table {table_name:?}: "),
+                                    tracing::Level::ERROR,
                                 );
+                                // Don't sleep after the final attempt.
+                                break;
                             }
                         }
                         tokio::time::sleep(Duration::from_millis(

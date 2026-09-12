@@ -217,7 +217,28 @@ impl ClickHouseConnectionInfo {
             })
         })?;
         self.inner
-            .write_non_batched_internal(rows_json.into_owned(), table)
+            .write_non_batched_internal(rows_json.into_owned(), table, None)
+            .await
+    }
+
+    /// Like `write_non_batched`, but attaches `dedup_token` to the insert via ClickHouse's
+    /// `insert_deduplication_token` setting so that retries of the same logical batch are
+    /// deduplicated by ClickHouse.
+    ///
+    /// The token is interpolated into the query, so it must not contain single quotes.
+    pub async fn write_non_batched_with_dedup_token<T: Serialize + Send + Sync>(
+        &self,
+        rows: Rows<'_, T>,
+        table: TableName,
+        dedup_token: &str,
+    ) -> Result<(), DelayedError> {
+        let rows_json = rows.as_json().map_err(|e| {
+            DelayedError::new(ErrorDetails::Serialization {
+                message: e.to_string(),
+            })
+        })?;
+        self.inner
+            .write_non_batched_internal(rows_json.into_owned(), table, Some(dedup_token.into()))
             .await
     }
 

@@ -1672,12 +1672,16 @@ async fn write_inference<T: InferenceQueries + ModelInferenceQueries + Send + Sy
     // Write the model inferences to the database (dual-write via ModelInferenceQueries trait)
     futures.push(
         async {
+            // Observability writes must never fail the request. Errors are already logged
+            // when the `Error` is constructed; we intentionally ignore them here.
             let _ = database.insert_model_inferences(&model_inferences).await;
         }
         .boxed(),
     );
     futures.push(Box::pin(async {
         // Write the inference to the Inference table (dual-write via InferenceQueries trait)
+        // Errors are already logged when the `Error` is constructed; we intentionally
+        // ignore them here so that observability backpressure cannot fail the request.
         match result {
             InferenceResult::Chat(result) => {
                 let stored_input = input.clone().into_stored_input();

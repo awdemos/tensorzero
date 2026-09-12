@@ -207,6 +207,8 @@ pub struct SchemaWithMetadata {
 
 #[cfg(test)]
 mod tests {
+    use googletest::prelude::*;
+
     use super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
@@ -369,11 +371,16 @@ mod tests {
         assert!(schema.validate(&instance).await.is_ok());
     }
 
-    #[test]
+    #[gtest]
     fn test_parse_from_str_invalid_schema() {
         let schema_str = r#"{"type": "invalid_type"}"#;
         let result = JSONSchema::parse_from_str(schema_str);
-        assert!(result.is_err());
+        expect_that!(
+            result,
+            err(displays_as(contains_substring(
+                "Failed to compile JSON Schema"
+            )))
+        );
     }
 
     #[tokio::test]

@@ -28,9 +28,12 @@ use super::model_inferences::{
 /// and submits them to Postgres on a schedule defined by a `BatchWritesConfig`.
 ///
 /// By default, channels are unbounded (no data is dropped). If `write_queue_capacity` is set,
-/// channels are bounded: when full, new rows are dropped and logged rather than buffering
-/// without limit. This protects against out-of-memory crashes at the cost of data loss
-/// under sustained backpressure.
+/// channels are bounded: when full, sends return an error rather than buffering without limit
+/// (callers decide whether to fail the request or drop the row). This protects against
+/// out-of-memory crashes at the cost of data loss under sustained backpressure.
+///
+/// Failed flushes are retried with exponential backoff; rows whose retries are exhausted
+/// are dropped.
 ///
 /// When a `PostgresBatchSender` is dropped, the batch writer will finish
 /// processing all outstanding batches once all senders are dropped.
@@ -137,25 +140,52 @@ impl PostgresBatchSender {
         })
     }
 
+    /// Sends each row, attempting all rows even if some fail. Returns the first error, if any.
     pub fn send_chat_inferences(&self, rows: &[ChatInferenceDatabaseInsert]) -> Result<(), Error> {
+        let mut first_error = None;
         for row in rows {
-            self.chat_inferences.send(row.clone(), "chat inference")?;
+            if let Err(e) = self.chat_inferences.send(row.clone(), "chat inference")
+                && first_error.is_none()
+            {
+                first_error = Some(e);
+            }
         }
-        Ok(())
+        match first_error {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
+    /// Sends each row, attempting all rows even if some fail. Returns the first error, if any.
     pub fn send_json_inferences(&self, rows: &[JsonInferenceDatabaseInsert]) -> Result<(), Error> {
+        let mut first_error = None;
         for row in rows {
-            self.json_inferences.send(row.clone(), "json inference")?;
+            if let Err(e) = self.json_inferences.send(row.clone(), "json inference")
+                && first_error.is_none()
+            {
+                first_error = Some(e);
+            }
         }
-        Ok(())
+        match first_error {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
+    /// Sends each row, attempting all rows even if some fail. Returns the first error, if any.
     pub fn send_model_inferences(&self, rows: &[StoredModelInference]) -> Result<(), Error> {
+        let mut first_error = None;
         for row in rows {
-            self.model_inferences.send(row.clone(), "model inference")?;
+            if let Err(e) = self.model_inferences.send(row.clone(), "model inference")
+                && first_error.is_none()
+            {
+                first_error = Some(e);
+            }
         }
-        Ok(())
+        match first_error {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 }
 
@@ -167,6 +197,14 @@ struct PostgresBatchWriter {
 
 const MAX_FLUSH_RETRIES: usize = 3;
 const FLUSH_RETRY_BASE_DELAY_MS: u64 = 100;
+
+/// Returns true if the error is a Postgres unique-constraint violation (SQLSTATE 23505).
+///
+/// A unique violation on retry means a previous attempt committed the rows but its response
+/// was lost, so the batch is already present and no further retries are needed.
+fn is_unique_violation(e: &sqlx::Error) -> bool {
+    matches!(e, sqlx::Error::Database(db_err) if db_err.code().as_deref() == Some("23505"))
+}
 
 /// Spawn a flush task that periodically drains `channel` and executes two insert queries
 /// (one for metadata, one for data) built from each batch.
@@ -196,12 +234,23 @@ fn spawn_flush_task<T: Send + 'static>(
                         match build_meta(&buffer) {
                             Ok(mut qb) => match qb.build().execute(&pool).await {
                                 Ok(_) => break,
-                                Err(e) if attempt + 1 < MAX_FLUSH_RETRIES => {
-                                    tracing::warn!("{meta_err} (attempt {}): {e}", attempt + 1);
-                                }
                                 Err(e) => {
-                                    tracing::error!("{meta_err}: {e}");
-                                    break;
+                                    if is_unique_violation(&e) {
+                                        // A previous attempt committed these rows but its
+                                        // response was lost, so the batch is already present.
+                                        tracing::debug!(
+                                            "{meta_err}: rows already present (attempt {}): {e}",
+                                            attempt + 1
+                                        );
+                                        break;
+                                    }
+                                    if attempt + 1 < MAX_FLUSH_RETRIES {
+                                        tracing::warn!("{meta_err} (attempt {}): {e}", attempt + 1);
+                                    } else {
+                                        tracing::error!("{meta_err}: {e}");
+                                        // Don't sleep after the final attempt.
+                                        break;
+                                    }
                                 }
                             },
                             Err(e) => {
@@ -218,12 +267,23 @@ fn spawn_flush_task<T: Send + 'static>(
                         match build_data(&buffer) {
                             Ok(mut qb) => match qb.build().execute(&pool).await {
                                 Ok(_) => break,
-                                Err(e) if attempt + 1 < MAX_FLUSH_RETRIES => {
-                                    tracing::warn!("{data_err} (attempt {}): {e}", attempt + 1);
-                                }
                                 Err(e) => {
-                                    tracing::error!("{data_err}: {e}");
-                                    break;
+                                    if is_unique_violation(&e) {
+                                        // A previous attempt committed these rows but its
+                                        // response was lost, so the batch is already present.
+                                        tracing::debug!(
+                                            "{data_err}: rows already present (attempt {}): {e}",
+                                            attempt + 1
+                                        );
+                                        break;
+                                    }
+                                    if attempt + 1 < MAX_FLUSH_RETRIES {
+                                        tracing::warn!("{data_err} (attempt {}): {e}", attempt + 1);
+                                    } else {
+                                        tracing::error!("{data_err}: {e}");
+                                        // Don't sleep after the final attempt.
+                                        break;
+                                    }
                                 }
                             },
                             Err(e) => {
