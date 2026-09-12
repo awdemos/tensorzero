@@ -3,7 +3,7 @@
 # VibeGate
 
 > [!IMPORTANT]
-> VibeGate is an independent community fork of [TensorZero](https://github.com/tensorzero/tensorzero), distributed under the Apache-2.0 license. It is not affiliated with or endorsed by the former TensorZero company. The upstream project discontinued development in June 2026; VibeGate continues maintenance and development on its own roadmap. The original docs, links, and some branding below are historical and may not reflect this fork's current status. Container images are published as `ghcr.io/awdemos/vibegate/*`.
+> VibeGate is an independent community fork of [TensorZero](https://github.com/tensorzero/tensorzero), distributed under the Apache-2.0 license. It is not affiliated with or endorsed by the former TensorZero company. The upstream project discontinued development in June 2026; VibeGate continues maintenance and development on its own roadmap. The original docs, links, and some branding below are historical and may not reflect this fork's current status. Container images will be published as `ghcr.io/awdemos/vibegate/*`.
 
 <p><picture><img src="https://www.tensorzero.com/github-trending-badge.svg" alt="GitHub Trending - #1 Repository Of The Day"></picture></p>
 
