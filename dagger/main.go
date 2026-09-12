@@ -20,7 +20,7 @@ func (m *Tensorzero) Build(
 	// Build profile: "dev" or "performance" (default "dev")
 	// +optional
 	profile string,
-	// Container image tag (default "tensorzero/gateway:latest")
+	// Container image tag (default "ghcr.io/awdemos/vibegate/gateway:latest")
 	// +optional
 	tag string,
 	// Push the image to a registry (default false)
@@ -40,7 +40,7 @@ func (m *Tensorzero) Build(
 		profile = "dev"
 	}
 	if tag == "" {
-		tag = "tensorzero/gateway:latest"
+		tag = "ghcr.io/awdemos/vibegate/gateway:latest"
 	}
 
 	buildArgs := []dagger.BuildArg{
