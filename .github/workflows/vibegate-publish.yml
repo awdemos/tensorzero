@@ -1,7 +1,7 @@
-# Publishes VibeGate container images (gateway, ui, evaluations) to GHCR.
+# Publishes VibeGate container images (gateway, ui, evaluations) to GHCR
+# (source of truth) and, behind a secrets guard, to Docker Hub (vibegate/*).
 # Structure mirrors upstream docker-hub-publish.yml, retargeted to
 # ghcr.io/awdemos/vibegate/* with the built-in GITHUB_TOKEN.
-# Docker Hub (vibegate/*) lands later behind a secrets guard once the org exists.
 
 name: Publish VibeGate images
 
@@ -23,6 +23,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  check:
+    name: Check publish targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.repository == 'awdemos/tensorzero'
+    outputs:
+      dockerhub: ${{ steps.dockerhub.outputs.enabled }}
+    permissions:
+      contents: read
+    steps:
+      - name: Check Docker Hub secrets
+        id: dockerhub
+        env:
+          DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN != '' && secrets.DOCKERHUB_USERNAME != '' }}
+        run: echo "enabled=$DH_TOKEN" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build and push image (${{ matrix.container.name }}, ${{ matrix.platform.target }})
     runs-on: ${{ matrix.platform.runner }}
@@ -113,6 +129,86 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  build-dockerhub:
+    name: Build and push image to Docker Hub (${{ matrix.container.name }}, ${{ matrix.platform.target }})
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 90
+    needs:
+      - check
+    if: needs.check.outputs.dockerhub == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - runner: ubuntu-24.04
+            target: linux/amd64
+          - runner: ubuntu-24.04-arm
+            target: linux/arm64
+        container:
+          - name: gateway
+            path: crates/gateway
+          - name: ui
+            path: ui
+          - name: evaluations
+            path: crates/evaluations
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Prepare
+        env:
+          PLATFORM_TARGET: ${{ matrix.platform.target }}
+        run: |
+          platform="$PLATFORM_TARGET"
+          echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14ee847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Build and push Docker image (Docker Hub)
+        id: push-dockerhub
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          platforms: ${{ matrix.platform.target }}
+          file: ./${{ matrix.container.path }}/Dockerfile
+          context: .
+          push: true
+          # No sbom/provenance here: plain image so the per-arch digest is a
+          # plain manifest, mergeable independently of the GHCR attested index.
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=true
+          tags: docker.io/vibegate/${{ matrix.container.name }}
+          no-cache: ${{ github.event_name == 'release' }}
+          build-args: |
+            PROFILE=performance
+            DEBUG_BUILD=0
+
+      - name: Export Docker Hub digest
+        env:
+          PUSH_DIGEST: ${{ steps.push-dockerhub.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests-dockerhub"
+          digest="$PUSH_DIGEST"
+          touch "$RUNNER_TEMP/digests-dockerhub/${digest#sha256:}"
+
+      - name: Upload Docker Hub digest
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: digests-dockerhub-${{ matrix.container.name }}-${{ env.PLATFORM_PAIR }}
+          path: ${{ runner.temp }}/digests-dockerhub/*
+          if-no-files-found: error
+          retention-days: 1
+
   merge:
     name: Merge multi-arch manifests (${{ matrix.container.name }})
     runs-on: ubuntu-latest
@@ -185,3 +281,58 @@ jobs:
         env:
           MATRIX_CONTAINER_NAME: ${{ matrix.container.name }}
           STEPS_META_OUTPUTS_VERSION: ${{ steps.meta.outputs.version }}
+
+  merge-dockerhub:
+    name: Merge multi-arch manifests on Docker Hub (${{ matrix.container.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs:
+      - check
+      - build-dockerhub
+    if: needs.check.outputs.dockerhub == 'true'
+    strategy:
+      matrix:
+        container:
+          - name: gateway
+          - name: ui
+          - name: evaluations
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - name: Download Docker Hub digests
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          path: ${{ runner.temp }}/digests-dockerhub
+          pattern: digests-dockerhub-${{ matrix.container.name }}-*
+          merge-multiple: true
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14ee847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Docker meta (Docker Hub)
+        id: meta-dockerhub
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        with:
+          images: docker.io/vibegate/${{ matrix.container.name }}
+          flavor: |
+            latest=false
+          tags: |
+            type=ref,event=tag
+            type=raw,value=${{ inputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=sha,format=long
+            type=raw,value=latest,enable=${{ github.event_name == 'release' && github.event.prerelease == false }}
+
+      - name: Create manifest list on Docker Hub and push
+        working-directory: ${{ runner.temp }}/digests-dockerhub
+        run: |
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf "docker.io/vibegate/${MATRIX_CONTAINER_NAME}@sha256:%s " *)
+        env:
+          MATRIX_CONTAINER_NAME: ${{ matrix.container.name }}
