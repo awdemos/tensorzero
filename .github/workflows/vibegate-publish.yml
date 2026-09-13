@@ -1,5 +1,6 @@
 # Publishes VibeGate container images (gateway, ui, evaluations) to GHCR
-# (source of truth) and, behind a secrets guard, to Docker Hub (vibegate/*).
+# (source of truth) and, behind a secrets guard, to Docker Hub
+# (vibecodingagency/*).
 # Structure mirrors upstream docker-hub-publish.yml, retargeted to
 # ghcr.io/awdemos/vibegate/* with the built-in GITHUB_TOKEN.
 
@@ -187,7 +188,7 @@ jobs:
           # No sbom/provenance here: plain image so the per-arch digest is a
           # plain manifest, mergeable independently of the GHCR attested index.
           outputs: type=image,push-by-digest=true,name-canonical=true,push=true
-          tags: docker.io/vibegate/${{ matrix.container.name }}
+          tags: docker.io/vibecodingagency/${{ matrix.container.name }}
           no-cache: ${{ github.event_name == 'release' }}
           build-args: |
             PROFILE=performance
@@ -320,7 +321,7 @@ jobs:
         id: meta-dockerhub
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
-          images: docker.io/vibegate/${{ matrix.container.name }}
+          images: docker.io/vibecodingagency/${{ matrix.container.name }}
           flavor: |
             latest=false
           tags: |
@@ -333,6 +334,6 @@ jobs:
         working-directory: ${{ runner.temp }}/digests-dockerhub
         run: |
           docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf "docker.io/vibegate/${MATRIX_CONTAINER_NAME}@sha256:%s " *)
+            $(printf "docker.io/vibecodingagency/${MATRIX_CONTAINER_NAME}@sha256:%s " *)
         env:
           MATRIX_CONTAINER_NAME: ${{ matrix.container.name }}
